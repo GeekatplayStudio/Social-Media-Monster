@@ -151,7 +151,7 @@ class WriterAgent:
             f"Adhere strictly to the requested style slider values and sample article voice."
         )
 
-        content = self.llm.generate(prompt, system_prompt=system_prompt)
+        content = self.llm.generate(prompt, system_prompt=system_prompt, platform=platform)
         headline = f"{news.headline} [{platform.upper()}]"
 
         return PostDraft(
