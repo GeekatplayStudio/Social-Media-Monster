@@ -79,6 +79,6 @@ class SecurityManager:
         
         # Redact API keys matching common patterns (sk-..., AIzaSy..., comfy_...)
         redacted = re.sub(r'sk-[a-zA-Z0-9]{20,}', '[REDACTED_API_KEY]', text)
-        redacted = re.sub(r'AIzaSy[a-zA-Z0-9_-]{33}', '[REDACTED_GEMINI_KEY]', redacted)
-        redacted = re.sub(r'sk-ant-[a-zA-Z0-9_-]{30,}', '[REDACTED_CLAUDE_KEY]', redacted)
+        redacted = re.sub(r'AIzaSy[a-zA-Z0-9_-]{20,}', '[REDACTED_GEMINI_KEY]', redacted)
+        redacted = re.sub(r'sk-ant-[a-zA-Z0-9_-]{20,}', '[REDACTED_CLAUDE_KEY]', redacted)
         return redacted

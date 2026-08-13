@@ -18,8 +18,8 @@ class TrafficControllerAgent:
 
     def evaluate_traffic_policy(self) -> dict:
         with Session(engine) as session:
-            ready_posts = session.exec(select(PostDraft).where(PostDraft.approved == True)).all()
-            unapproved_posts = session.exec(select(PostDraft).where(PostDraft.approved == False)).all()
+            ready_posts = session.exec(select(PostDraft).where(PostDraft.status == "approved")).all()
+            unapproved_posts = session.exec(select(PostDraft).where(PostDraft.status == "draft")).all()
             total_queue = len(ready_posts) + len(unapproved_posts)
 
             # If we already have sufficient quality articles accepted, halt web traffic
