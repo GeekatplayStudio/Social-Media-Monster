@@ -121,10 +121,31 @@ class VisualAgent:
 
     def _build_vivid_comfy_prompt(self, headline: str, content: str, aspect_ratio: str) -> str:
         clean_title = headline.replace("Headline:", "").replace("[Discussion]", "").replace("Deep Dive:", "").strip()
+        lower_title = (headline + " " + content).lower()
+
+        if any(k in lower_title for k in ["database", "sqlite", "wal", "corruption", "bug", "storage"]):
+            return (
+                f"High-resolution 16-bit RPG isometric pixel art depicting a dark cyberpunk server vault, "
+                f"glowing blue database core cylinders, red neon binary corruption glitches, wireframe code streams, "
+                f"dark matte background, rich 16-bit dithering shading."
+            )
+        elif any(k in lower_title for k in ["ai", "llm", "claude", "gpt", "model", "neural", "agent"]):
+            return (
+                f"High-resolution 16-bit RPG character portrait of an AI systems architect, "
+                f"glowing holographic neural network nodes, cybernetic visor, atmospheric background, "
+                f"rich 16-bit RPG color palette, detailed dithered shading."
+            )
+        elif any(k in lower_title for k in ["code", "developer", "git", "crm", "python", "software"]):
+            return (
+                f"High-resolution 16-bit RPG isometric pixel art workstation, glowing dual cybernetic monitors "
+                f"displaying matrix code streams, neon ambient lighting, detailed pixelated terminal, "
+                f"dark background, 16-bit retro aesthetic."
+            )
+
         return (
-            f"High-contrast editorial concept artwork representing '{clean_title}', "
-            f"glowing neural network nodes, cybernetic sculpture visual, metallic textures, "
-            f"cinematic studio lighting, cyan and amber highlights, highly detailed, masterwork 8k"
+            f"High-resolution 16-bit RPG pixel art concept depicting '{clean_title[:80]}', "
+            f"vivid retro 16-bit color palette, isometric perspective, dark matte background, "
+            f"detailed dithered shading, masterwork pixel artwork."
         )
 
     def _dispatch_stability_ai(self, prompt_text: str, save_path: str) -> bool:
