@@ -248,6 +248,63 @@ def test_circuit_breaker_reopens_after_cooldown(monkeypatch):
     assert breaker.is_open("ollama@local") is False
 
 
+def test_abbreviations_do_not_split_sentences():
+    """"Aug. 2" used to become two bullets, the second starting with a bare "2"."""
+    text = ("Anthropic said Claude models launched on or after Aug. 2 would include "
+            "watermarking. That includes content created through the API.")
+    parts = LLMClient._sentences(text, limit=8)
+    assert len(parts) == 2
+    assert "Aug. 2 would include" in parts[0]
+    assert not parts[1].startswith("2 ")
+
+
+def test_markdown_extract_noise_is_stripped():
+    """Tavily Extract returns markdown; image embeds must not become 'verified facts'."""
+    from src.agents.verifier_agent import VerifierAgent
+    raw = ("[![](https://cdn.example.com/banner.png)](https://example.com)\n"
+           "Anthropic announced watermarking for Claude output.\n"
+           "Read the [full announcement](https://example.com/post) for details.\n"
+           "Advertisement\n")
+    cleaned = VerifierAgent._clean(raw)
+    assert "https://" not in cleaned
+    assert "cdn.example.com" not in cleaned
+    assert "Anthropic announced watermarking" in cleaned
+    assert "full announcement" in cleaned, "link text should survive, only the URL is dropped"
+
+
+# --------------------------------------------------------------- key rotation
+
+def test_rotated_key_invalidates_the_previous_key(tmp_path):
+    """
+    The old master key was committed to git, so rotation must make it useless: data
+    encrypted under a new key must not be readable with the old one.
+    """
+    old_file = tmp_path / "old.secret"
+    old_key = SecurityManager.generate_master_key()
+    old_file.write_bytes(old_key)
+
+    old_sec = SecurityManager(secret_file=str(old_file), master_key=old_key)
+    secret = "sk-live-credential-value-1234567890"
+    under_old = old_sec.encrypt_credential(secret)
+    assert old_sec.decrypt_credential(under_old) == secret
+
+    # Rotate: new key, re-encrypt the recovered plaintext.
+    new_key = SecurityManager.generate_master_key()
+    assert new_key != old_key
+    new_sec = SecurityManager(secret_file=str(tmp_path / "new.secret"), master_key=new_key)
+    under_new = new_sec.encrypt_credential(old_sec.decrypt_credential(under_old))
+
+    assert new_sec.decrypt_credential(under_new) == secret, "new key must read new data"
+    assert old_sec.decrypt_credential(under_new) != secret, "old key must NOT read new data"
+    assert old_sec.decrypt_credential(under_new) == "", "old key should fail closed"
+
+
+def test_generated_master_keys_are_unique_and_fernet_sized():
+    keys = {SecurityManager.generate_master_key() for _ in range(25)}
+    assert len(keys) == 25
+    assert all(len(k) == 44 for k in keys)
+
+
 def test_tavily_key_is_redacted_from_output():
     sec = SecurityManager()
     text = "debug dump key=tvly-dev-AbCdEfGhIjKlMnOpQrStUvWx1234"

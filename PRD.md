@@ -110,7 +110,8 @@ are validated.
 ## 5. Security & Data Protection Standards
 
 * **Credential Storage**: All API keys (OpenAI, Gemini, Anthropic, Stability AI, ComfyUI Org, Tavily, and platform tokens) are encrypted in SQLite using `SecurityManager` (`ENC:v2:` Fernet tokens; legacy `ENC:` records remain readable).
-* **Master Key**: Held in `.env.secret` or `SMM_MASTER_KEY`. The file is git-ignored and must never be committed. If it is ever exposed, rotate every stored credential.
+* **Master Key**: Held in `.env.secret` or `SMM_MASTER_KEY`. The file is git-ignored and must never be committed.
+* **Key Rotation**: `scripts/rotate_key.py` performs an atomic rotation — it verifies every stored credential is readable, generates a new 256-bit key, re-encrypts all credentials under it in one transaction, archives the previous key, and asserts that the new key decrypts the data while the previous key does not. Because `.env.secret` was tracked prior to `v1.1`, that key is considered compromised; rotation renders it inert against current data without rewriting git history. Credentials that also live at the provider should be regenerated there as well.
 * **Key Handling in the UI**: `GET /api/provider-config` returns only whether each credential is set, never the decrypted value. Submitting a blank field preserves the stored key instead of erasing it.
 * **Payload Sanitization**: Automatic stripping of script/iframe tags, control chars, and prompt injection scaffolding on input, with provider token redaction on output.
 * **Authentication**: Google OAuth 2.0 integration with conditional local bypass.

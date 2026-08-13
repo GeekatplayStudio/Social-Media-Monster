@@ -40,6 +40,13 @@ PROMPT_SECTION_LABELS = [
     "Source Summary", "Problem", "Task",
 ]
 
+# Tokens that end in a period without ending a sentence.
+ABBREVIATIONS = {
+    "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "sept", "oct", "nov", "dec",
+    "inc", "ltd", "co", "corp", "dr", "mr", "mrs", "ms", "prof", "st", "vs", "etc",
+    "no", "fig", "approx", "al", "u.s", "e.g", "i.e", "est", "min", "max", "ver", "rev",
+}
+
 STOPWORDS = {
     "the", "a", "an", "and", "or", "but", "for", "with", "from", "into", "that", "this",
     "these", "those", "of", "to", "in", "on", "at", "by", "as", "is", "are", "was", "were",
@@ -386,16 +393,32 @@ class LLMClient:
         space = window.rfind(" ")
         return (window[:space] if space > limit * 0.5 else window).rstrip(" ,;:-") + "…"
 
-    @staticmethod
-    def _sentences(text: str, limit: int = 6) -> list:
-        parts = []
+    @classmethod
+    def _split_sentences(cls, text: str) -> list:
+        """
+        Sentence split that survives abbreviations. A naive split on '. ' turns
+        "launched on or after Aug. 2 would include watermarking" into two bullets, one of
+        which begins "2 would include...".
+        """
+        fragments = []
         for chunk in re.split(r'(?<=[.!?])\s+|\n+', text or ""):
-            # Facts often arrive already bulleted; keep the text, drop the marker so the
-            # platform templates do not render "• - fact".
-            cleaned = re.sub(r'^\s*(?:[-*•▪]|\d+[.)])\s*', '', chunk).strip()
-            if len(cleaned) > 25:
-                parts.append(cleaned)
-        return parts[:limit]
+            frag = re.sub(r'^\s*(?:[-*•▪]|\d+[.)])\s*', '', chunk).strip()
+            if not frag:
+                continue
+            if fragments:
+                previous = fragments[-1]
+                last_word = previous.split()[-1].rstrip('.').lower() if previous.split() else ""
+                # Re-join when the break followed an abbreviation, or when the next
+                # fragment cannot start a sentence.
+                if last_word in ABBREVIATIONS or frag[0].isdigit() or frag[0].islower():
+                    fragments[-1] = f"{previous} {frag}"
+                    continue
+            fragments.append(frag)
+        return fragments
+
+    @classmethod
+    def _sentences(cls, text: str, limit: int = 6) -> list:
+        return [s for s in cls._split_sentences(text) if len(s) > 25][:limit]
 
     def _synthesize_article(self, prompt: str, platform: str) -> str:
         headline = self._strip_boilerplate(self._field(prompt, "Headline")) or "Industry Update"

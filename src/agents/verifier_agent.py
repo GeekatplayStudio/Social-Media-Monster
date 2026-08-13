@@ -6,8 +6,16 @@ from src.core.models import TrendItem, VerifiedNews
 from src.core.llm_client import LLMClient
 from src.core.tavily_client import TavilyClient
 
-# Feed furniture that adds no information to a story.
+# Feed furniture and page chrome that adds no information to a story.
+# Tavily Extract returns markdown, so image embeds and link targets are stripped here -
+# otherwise CDN URLs end up quoted as "verified facts".
 FEED_NOISE_PATTERNS = [
+    # Order matters: the linked-image form must be removed before the bare image form,
+    # otherwise stripping the inner image leaves an orphaned "[](url)" behind.
+    r'\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)',       # linked markdown images
+    r'!\[[^\]]*\]\([^)]*\)',                    # markdown images
+    r'\[\s*\]\([^)]*\)',                        # empty-text links
+    r'^\s*(?:https?://\S+\s*)+$',               # bare URL lines
     r'Comments\s*$',
     r'\bRead more\b.*$',
     r'\bContinue reading\b.*$',
@@ -15,8 +23,12 @@ FEED_NOISE_PATTERNS = [
     r'\bsubmitted by\s+/u/\S+',
     r'\[link\]|\[comments\]',
     r'&#\d+;',
+    r'^\s*(?:Share|Tweet|Subscribe|Advertisement|Sign up|Newsletter)\s*$',
     r'\s*\|\s*[A-Z][A-Za-z ]{2,20}$',
 ]
+
+# Applied after removal: keeps the visible text of a markdown link, drops the target.
+MARKDOWN_LINK_PATTERN = r'\[([^\]]+)\]\([^)]*\)'
 
 # Domains whose reporting we treat as first-party or high-editorial-standard.
 HIGH_TRUST_DOMAINS = (
@@ -132,7 +144,8 @@ class VerifierAgent:
 
     @staticmethod
     def _condense(text: str, sentences: int = 3) -> str:
-        parts = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text or "") if len(s.strip()) > 30]
+        # Shared splitter so abbreviations ("Aug. 2") are not treated as sentence ends.
+        parts = [s for s in LLMClient._split_sentences(text) if len(s) > 30]
         return " ".join(parts[:sentences]) if parts else (text or "").strip()[:400]
 
     @staticmethod
@@ -141,6 +154,8 @@ class VerifierAgent:
         cleaned = re.sub(r'<[^>]+>', ' ', cleaned)
         for pattern in FEED_NOISE_PATTERNS:
             cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE | re.MULTILINE)
+        # Unwrap remaining markdown links so the prose survives without the URL.
+        cleaned = re.sub(MARKDOWN_LINK_PATTERN, r'\1', cleaned)
         cleaned = re.sub(r'[ \t]{2,}', ' ', cleaned)
         cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
         return cleaned.strip()

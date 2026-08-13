@@ -47,6 +47,7 @@ It features a high-contrast corporate control dashboard equipped with a **15-Ban
 ### 🔐 4. Security & Credential Encryption
 * **Fernet Credential Encryption**: All API credentials (OpenAI, Gemini, Anthropic, Stability AI, ComfyUI Org, Tavily, and platform tokens) are encrypted with a PBKDF2-HMAC-SHA256 derived Fernet key before saving to SQLite (`ENC:v2:...`). Records written by earlier builds still decrypt transparently.
 * **Master Key Handling**: The key lives in `.env.secret` (git-ignored) or the `SMM_MASTER_KEY` environment variable. It is never committed.
+* **Key Rotation**: `python scripts/rotate_key.py` replaces the master key and re-encrypts every stored credential under the new one in a single transaction, so a previously exposed key stops decrypting current data.
 * **Payload Sanitization Gate**: Input script/injection stripping and output redaction of OpenAI, Anthropic, Gemini, Tavily and Slack-style tokens.
 * **Google OAuth 2.0 Auth**: Conditional remote protection (bypassed on local desktop, enforced on remote deployment).
 
@@ -131,7 +132,20 @@ Manual start without the scripts still works:
 python main.py                     # honours SMM_HOST / SMM_PORT
 ```
 
-### 4. Tavily is Optional
+### 4. Rotating the Credential Master Key
+
+`.env.secret` was tracked in git before `v1.1`, so that key must be treated as public. Rotate it:
+
+```bash
+python scripts/rotate_key.py --dry-run   # report what would change
+python scripts/rotate_key.py             # rotate (asks to confirm; --yes to skip)
+```
+
+The tool decrypts every stored credential with the current key, generates a new 256-bit key, re-encrypts everything under it in one transaction, and archives the old key as `.env.secret.revoked-<timestamp>` (git-ignored). It refuses to run if any value fails to decrypt first, then verifies that the new key reads the data and the old key no longer can.
+
+> Rotation does **not** rewrite git history — the old key remains in past commits. Rotation is what makes it worthless against your current data. Credentials that also exist at the provider (OpenAI, Tavily, platform tokens) should additionally be regenerated in those dashboards.
+
+### 5. Tavily is Optional
 
 The engine runs fully without a Tavily key — `ResearchAgent` falls back to Google News RSS and the tech feeds, and `VerifierAgent` works from feed summaries. Adding a key improves discovery relevance and gives the verifier full article bodies to extract facts from.
 

@@ -30,10 +30,22 @@ class SecurityManager:
     3. Redaction of sensitive credentials and API keys in outbound responses.
     """
 
-    def __init__(self, secret_file: str = None):
+    def __init__(self, secret_file: str = None, master_key=None):
+        """
+        master_key pins the key explicitly instead of reading it from the environment or
+        key file. Key rotation needs this so old and new keys can be held side by side.
+        """
         self.secret_file = secret_file or os.environ.get("SMM_SECRET_FILE", ".env.secret")
-        self.master_key = self._get_or_create_master_key()
+        if master_key:
+            self.master_key = master_key.encode("utf-8") if isinstance(master_key, str) else master_key
+        else:
+            self.master_key = self._get_or_create_master_key()
         self._fernet = self._build_fernet()
+
+    @staticmethod
+    def generate_master_key() -> bytes:
+        """A fresh urlsafe-base64 encoded 256-bit key."""
+        return base64.urlsafe_b64encode(os.urandom(32))
 
     # ------------------------------------------------------------------ key material
 
@@ -52,7 +64,7 @@ class SecurityManager:
                 pass
 
         # Generate random 256-bit key
-        key = base64.urlsafe_b64encode(os.urandom(32))
+        key = self.generate_master_key()
         try:
             with open(self.secret_file, "wb") as f:
                 f.write(key)
