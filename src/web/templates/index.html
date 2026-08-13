@@ -109,6 +109,18 @@
                         <input type="password" id="cfgComfyOrgKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="comfy_...">
                     </div>
                     <div>
+                        <label class="block text-gray-400 mb-1">
+                            Tavily Research API Key
+                            <span id="cfgTavilyStatus" class="ml-2 text-[10px] font-bold uppercase text-gray-500">not set</span>
+                        </label>
+                        <input type="password" id="cfgTavilyKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="tvly-...">
+                        <p class="text-[10px] text-gray-500 mt-1">
+                            Powers live news discovery (Tavily Search) and full-article fact extraction (Tavily Extract).
+                            Leave blank to fall back to Google News RSS. Get a key at
+                            <span class="text-sky-400">tavily.com</span>.
+                        </p>
+                    </div>
+                    <div>
                         <label class="block text-gray-400 mb-1">Local / Custom Endpoint Base URL</label>
                         <input type="text" id="cfgBaseUrl" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" value="http://127.0.0.1:11434">
                     </div>
@@ -615,6 +627,7 @@
                 anthropic_api_key: document.getElementById('cfgAnthropicKey').value,
                 stability_api_key: document.getElementById('cfgStabilityKey').value,
                 comfy_org_api_key: document.getElementById('cfgComfyOrgKey').value,
+                tavily_api_key: document.getElementById('cfgTavilyKey').value,
                 base_url: document.getElementById('cfgBaseUrl').value
             };
             await fetch('/api/provider-config', {
@@ -623,7 +636,35 @@
                 body: JSON.stringify(payload)
             });
             alert(`Encrypted Provider Settings Saved! Host: ${payload.host_mode.toUpperCase()} | Provider: ${payload.provider.toUpperCase()}`);
+            document.getElementById('cfgTavilyKey').value = '';
+            loadProviderConfig();
             closeConfigModal();
+        }
+
+        // Keys are never sent back to the browser; only whether each one is stored.
+        async function loadProviderConfig() {
+            try {
+                const res = await fetch('/api/provider-config');
+                const cfg = await res.json();
+                if (cfg.host_mode) document.getElementById('cfgHostMode').value = cfg.host_mode;
+                if (cfg.provider) document.getElementById('cfgProvider').value = cfg.provider;
+                if (cfg.base_url) document.getElementById('cfgBaseUrl').value = cfg.base_url;
+
+                const badge = document.getElementById('cfgTavilyStatus');
+                if (badge) {
+                    badge.innerText = cfg.tavily_api_key_set ? 'key stored' : 'not set';
+                    badge.className = cfg.tavily_api_key_set
+                        ? 'ml-2 text-[10px] font-bold uppercase text-emerald-400'
+                        : 'ml-2 text-[10px] font-bold uppercase text-gray-500';
+                }
+                ['cfgOpenAIKey', 'cfgGeminiKey', 'cfgAnthropicKey', 'cfgStabilityKey', 'cfgComfyOrgKey', 'cfgTavilyKey']
+                    .forEach((id, i) => {
+                        const field = ['openai_api_key', 'gemini_api_key', 'anthropic_api_key',
+                                       'stability_api_key', 'comfy_org_api_key', 'tavily_api_key'][i];
+                        const el = document.getElementById(id);
+                        if (el) el.placeholder = cfg[field + '_set'] ? '•••••••• stored (leave blank to keep)' : el.placeholder;
+                    });
+            } catch (e) { /* dashboard still usable without provider config */ }
         }
 
         function calculateActiveWriterPersona() {
@@ -874,23 +915,27 @@
                             <span class="px-3 py-1 rounded text-xs font-bold uppercase bg-dark-4 text-gray-200">${p.platform}</span>
                             <button onclick="generateSingleTestArticle(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-emerald-400 border border-emerald-800 transition">Generate Test Article</button>
                             <button onclick="generateSingleTestImage(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-sky-400 border border-sky-800 transition">Generate 1 Test Image</button>
+                            <button onclick="approvePost(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-amber-300 border border-amber-800 transition">Approve</button>
+                            <button onclick="rejectPost(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-rose-400 border border-rose-900 transition">Reject</button>
+                            <span class="px-2 py-1 rounded text-[10px] font-bold uppercase ${statusClass(p.status)}">${p.status}</span>
                         </div>
                         <span class="text-xs font-mono text-emerald-400">CTR: ${p.ctr_score}% | AI Score: ${p.ai_detection_score}</span>
                     </div>
-                    <h3 class="text-sm font-bold text-gray-100">${p.headline}</h3>
-                    <div class="text-xs text-gray-300 whitespace-pre-wrap bg-dark-3 p-3 rounded-xl">${p.content}</div>
-                    
+                    <h3 class="text-sm font-bold text-gray-100">${escapeHtml(p.headline)}</h3>
+                    <div class="text-xs text-gray-300 whitespace-pre-wrap bg-dark-3 p-3 rounded-xl">${escapeHtml(p.content)}</div>
+
                     <details class="bg-dark-3 p-3 rounded-xl border border-gray-800 text-[11px] text-gray-400 font-mono">
                         <summary class="cursor-pointer font-bold text-gray-300 hover:text-white">⚙ Article Generation Parameters & Weights</summary>
                         <div class="mt-2 space-y-1 pt-2 border-t border-gray-700">
-                            <p><span class="text-gray-400">Persona Profile:</span> <strong class="text-sky-400">${p.persona_key || 'tech_visionary'}</strong></p>
-                            <p><span class="text-gray-400">Style Weights:</span> Seriousness: +0.2 | Technical Depth: +0.6 | Sarcasm: +0.4 | Pacing: -0.3</p>
-                            <p><span class="text-gray-400">Visual Prompt:</span> <span class="text-purple-300">${p.image_prompt || 'Vivid 16-bit RPG retro illustration concept'}</span></p>
+                            <p><span class="text-gray-400">Persona Profile:</span> <strong class="text-sky-400">${escapeHtml(p.persona_key || 'tech_visionary')}</strong></p>
+                            <p><span class="text-gray-400">Style Weights:</span> ${liveStyleWeightsLabel()}</p>
+                            <p><span class="text-gray-400">SEO Keywords:</span> ${escapeHtml(p.seo_keywords || '—')}</p>
+                            <p><span class="text-gray-400">Visual Prompt:</span> <span class="text-purple-300">${escapeHtml(p.image_prompt || 'Not generated yet')}</span></p>
                             <p><span class="text-gray-400">Humanization/CTR:</span> CTR Score: ${p.ctr_score}% | AI Detection: ${p.ai_detection_score}</p>
                         </div>
                     </details>
 
-                    ${p.image_path ? `<img src="/static/images/${p.image_path.replace(/\\/g, '/').split('/').pop()}" class="w-full rounded-xl max-h-72 object-cover border border-gray-700">` : ''}
+                    ${p.image_path ? `<img src="/static/images/${encodeURIComponent(p.image_path)}" class="w-full rounded-xl max-h-72 object-cover border border-gray-700">` : ''}
                 </div>
             `).join('');
         }
@@ -939,6 +984,50 @@
             fetchLogs();
         }
 
+        function escapeHtml(value) {
+            if (value === null || value === undefined) return '';
+            return String(value)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        function statusClass(status) {
+            switch ((status || '').toLowerCase()) {
+                case 'approved': return 'bg-emerald-900 text-emerald-300 border border-emerald-700';
+                case 'published': return 'bg-sky-900 text-sky-300 border border-sky-700';
+                case 'rejected': return 'bg-rose-950 text-rose-300 border border-rose-800';
+                case 'needs_review': return 'bg-amber-950 text-amber-300 border border-amber-800';
+                default: return 'bg-dark-4 text-gray-400 border border-gray-700';
+            }
+        }
+
+        // Reads the live equalizer sliders instead of printing a hardcoded string.
+        function liveStyleWeightsLabel() {
+            const shown = ['seriousness', 'technical_depth', 'cynicism', 'pacing_length', 'clickbait_energy'];
+            return shown.map(k => {
+                const slider = document.getElementById('eq_' + k);
+                const v = slider ? parseFloat(slider.value) : 0;
+                const label = k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+                return `${label}: ${v >= 0 ? '+' : ''}${v.toFixed(1)}`;
+            }).join(' | ');
+        }
+
+        async function approvePost(id) {
+            const res = await fetch(`/api/posts/${id}/approve`, { method: 'POST' });
+            const data = await res.json();
+            if (data.published) {
+                alert(`Post #${id} approved and ${data.published} post(s) dispatched to live channels.`);
+            } else {
+                alert(`Post #${id} approved. In DEMO mode nothing is dispatched — switch to PRODUCTION to publish.`);
+            }
+            fetchPosts(); fetchLogs();
+        }
+
+        async function rejectPost(id) {
+            await fetch(`/api/posts/${id}/reject`, { method: 'POST' });
+            fetchPosts(); fetchLogs();
+        }
+
         async function stopAllAgents() {
             await fetch('/api/stop', { method: 'POST' });
             alert('EMERGENCY STOP ACTIVATED! All background agent operations halted.');
@@ -949,7 +1038,7 @@
         async function triggerPipeline() { alert('Super Agent cycle triggered!'); await fetch('/api/trigger', { method: 'POST' }); setTimeout(() => { fetchLogs(); fetchTelemetry(); fetchPosts(); }, 1500); }
         async function savePersona() { alert('Persona saved!'); }
 
-        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); fetchLogs(); fetchTelemetry(); fetchPosts();
+        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); loadProviderConfig(); fetchLogs(); fetchTelemetry(); fetchPosts();
         setInterval(() => { fetchLogs(); fetchTelemetry(); }, 2000);
     </script>
 </body>

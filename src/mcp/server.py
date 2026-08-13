@@ -58,6 +58,29 @@ class SocialMediaMonsterMCP:
                     },
                     "required": ["post_id"]
                 }
+            },
+            {
+                "name": "reject_post",
+                "description": "Reject a post draft by ID so it is never published.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "post_id": {"type": "integer", "description": "ID of post to reject"}
+                    },
+                    "required": ["post_id"]
+                }
+            },
+            {
+                "name": "research_topic",
+                "description": "Run a live Tavily news search for a single topic and return ranked results without writing posts.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "topic": {"type": "string", "description": "Topic or question to research"},
+                        "max_results": {"type": "integer", "description": "Number of results (default 6)"}
+                    },
+                    "required": ["topic"]
+                }
             }
         ]
 
@@ -98,7 +121,8 @@ class SocialMediaMonsterMCP:
                 if target_status:
                     query = query.where(PostDraft.status == target_status)
                 posts = session.exec(query.order_by(desc(PostDraft.id)).limit(10)).all()
-                return {"posts": [p.dict() for p in posts]}
+                # .dict() is deprecated under Pydantic v2 and emits a warning per call.
+                return {"posts": [p.model_dump(mode="json") for p in posts]}
 
         elif name == "approve_post":
             post_id = arguments.get("post_id")
@@ -112,5 +136,26 @@ class SocialMediaMonsterMCP:
                         self.super_agent.publisher_agent.run()
                     return {"status": "approved", "post_id": post_id}
             return {"error": "Post not found"}
+
+        elif name == "reject_post":
+            post_id = arguments.get("post_id")
+            with Session(engine) as session:
+                post = session.get(PostDraft, post_id)
+                if post:
+                    post.status = "rejected"
+                    session.add(post)
+                    session.commit()
+                    return {"status": "rejected", "post_id": post_id}
+            return {"error": "Post not found"}
+
+        elif name == "research_topic":
+            topic = arguments.get("topic", "")
+            if not topic:
+                return {"error": "topic is required"}
+            tavily = self.super_agent.research_agent.tavily
+            if not tavily.is_configured():
+                return {"error": "Tavily API key is not configured. Add it in Provider Config or set TAVILY_API_KEY."}
+            results = tavily.search(topic, max_results=int(arguments.get("max_results", 6)))
+            return {"status": "ok", "topic": topic, "count": len(results), "results": results}
 
         return {"error": f"Unknown tool: {name}"}

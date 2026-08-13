@@ -23,6 +23,23 @@ comfyui:
   workflow_type: "txt2img"
   default_width: 1024
   default_height: 1024
+  poll_attempts: 60            # History polls before giving up on a render
+  poll_interval_seconds: 2     # Seconds between history polls (60 x 2s = 2 min budget)
+  max_images_per_cycle: 5      # Bulk auto-render cap per pipeline cycle
+
+# Tavily Research API - live news discovery + full-article fact extraction.
+# The key is normally stored encrypted via the dashboard Provider Config panel.
+# It can also be supplied here or through the TAVILY_API_KEY environment variable.
+tavily:
+  api_key: ""
+  topic: "news"                # "news" for fresh reporting, "general" for evergreen sources
+  search_depth: "advanced"     # "basic" (cheaper) or "advanced" (better relevance)
+  days: 7                      # Freshness window for the news topic
+  include_raw_content: false   # Ask search to return article bodies (costs more credits)
+  extract_depth: "basic"       # "basic" or "advanced" for the Extract endpoint
+  timeout_seconds: 30
+  include_domains: []
+  exclude_domains: []
 
 llm:
   provider: "ollama"
@@ -142,6 +159,7 @@ platforms:
     developer_portal_url: "https://developer.wordpress.org/rest-api/"
 
 research_sources:
+  max_results_per_topic: 6
   rss_feeds:
     - "https://news.ycombinator.com/rss"
     - "https://techcrunch.com/category/artificial-intelligence/feed/"

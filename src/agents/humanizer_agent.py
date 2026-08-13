@@ -19,6 +19,8 @@ class HumanizerAgent:
         optimized_count = 0
 
         with Session(engine) as session:
+            # Only untouched drafts. Re-humanizing an already-humanized post degrades it
+            # a little more on every cycle and burns provider tokens for no gain.
             drafts = session.exec(
                 select(PostDraft).where(PostDraft.status == "draft")
             ).all()
@@ -47,8 +49,25 @@ class HumanizerAgent:
                     f"Ensure high CTR engagement hooks."
                 )
 
-                refined_text = self.llm.generate(prompt, system_prompt=system_prompt)
-                
+                # Pass the draft's own platform through, otherwise the client formats every
+                # channel as a tweet. task="rewrite" keeps this a rewrite of the caller's
+                # text rather than the generation of a brand new post.
+                refined_text = self.llm.generate(
+                    prompt,
+                    system_prompt=system_prompt,
+                    platform=draft.platform,
+                    task="rewrite",
+                )
+
+                # A rewrite that came back empty or gutted is discarded - keep the original.
+                if not refined_text or len(refined_text) < max(40, len(humanized_content) * 0.4):
+                    log_event(
+                        "HumanizerAgent",
+                        f"Rewrite for draft #{draft.id} was too short to trust. Keeping original copy.",
+                        level="WARNING",
+                    )
+                    refined_text = humanized_content
+
                 # 3. Calculate scores
                 ai_score = self._estimate_ai_score(refined_text)
                 ctr_score = self._calculate_ctr_score(draft.headline, refined_text)
@@ -61,6 +80,7 @@ class HumanizerAgent:
                 draft.ai_detection_score = ai_score
                 draft.ctr_score = ctr_score
                 draft.seo_keywords = seo_keywords
+                draft.status = "humanized"
                 session.add(draft)
                 session.commit()
                 optimized_count += 1
@@ -87,11 +107,14 @@ class HumanizerAgent:
         Estimates AI detection probability (0.0 = completely human, 1.0 = obvious ChatGPT bot).
         Checks trope frequency and sentence variance.
         """
-        words = text.lower().split()
+        lowered = (text or "").lower()
+        words = lowered.split()
         if not words:
             return 0.5
 
-        trope_matches = sum(1 for w in words if w in self.ai_trope_words)
+        # Match on the full text: most entries in the trope list are phrases, so token
+        # membership testing could never fire for "in conclusion" or "in the realm of".
+        trope_matches = sum(lowered.count(trope) for trope in self.ai_trope_words)
         trope_ratio = trope_matches / max(len(words), 1)
 
         sentences = [s for s in re.split(r'[.!?]', text) if s.strip()]

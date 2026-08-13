@@ -26,11 +26,13 @@
 4. **Author Voice Cloning**: Upload sample articles to extract exact sentence rhythms, vocabulary, and writing fingerprints.
 5. **Dynamic 16-Bit RPG Writer Personas**: 6 retro pixel art author archetypes dynamically matching style vector sliders in real time.
 6. **Traffic Controller Agent**: Bandwidth watchdog that halts unnecessary web scanning when pending post quotas are met.
-7. **Abstract Provider API Layer**: Abstracted routing across Local Ollama, OpenAI, Google Gemini, Anthropic Claude, Stability AI, and ComfyUI Org.
-8. **Extreme Security & Credential Encryption**: PBKDF2 AES-256/Fernet credential encryption (`.env.secret`) and payload sanitization gate.
-9. **Google OAuth 2.0 Authentication**: Conditional remote access protection (bypassed on local desktop, enforced on remote deployment).
-10. **MCP Protocol Server**: Standardized MCP tools (`/api/mcp/manifest` and `/api/mcp/call`).
-11. **Temporal State Manager**: SQLite worker state checkpointing for continuous execution recovery.
+7. **Abstract Provider API Layer**: Abstracted routing across Local Ollama, OpenAI, Google Gemini, Anthropic Claude, Stability AI, and ComfyUI Org. When no provider responds, an offline synthesizer reformats only the material already present in the prompt — it never fabricates story facts.
+8. **Tavily Research Layer (optional)**: Tavily Search drives topic discovery with relevance scoring and a freshness window; Tavily Extract retrieves full article bodies for fact verification. It is never a hard dependency — an absent, blank, placeholder, rate-limited or rejected key degrades to Google News RSS and the cycle still completes.
+9. **Security & Credential Encryption**: PBKDF2-HMAC-SHA256 derived Fernet credential encryption with a git-ignored master key (`.env.secret` or `SMM_MASTER_KEY`), plus an input/output payload sanitization gate.
+10. **Google OAuth 2.0 Authentication**: Conditional remote access protection (bypassed on local desktop, enforced on remote deployment).
+11. **MCP Protocol Server**: Standardized MCP tools (`/api/mcp/manifest` and `/api/mcp/call`).
+12. **Temporal State Manager**: SQLite worker state checkpointing for continuous execution recovery.
+13. **Explicit Draft Lifecycle**: `draft → humanized → approved | needs_review → published | rejected`. Each agent claims only its own stage, so no post is reprocessed on later cycles and no verified story is drafted twice.
 
 ---
 
@@ -70,23 +72,57 @@
 * **Core Runtime**: Python 3.12+
 * **Web Framework**: FastAPI & Uvicorn
 * **Database / ORM**: SQLite & SQLModel
-* **Security**: PyCryptodome / Cryptography (Fernet symmetric key encryption)
+* **Security**: `cryptography` (Fernet symmetric key encryption over a PBKDF2-derived key)
+* **Research**: Tavily Search & Extract API (optional; RSS fallback via feedparser)
 * **Frontend Interface**: HTML5, Vanilla JavaScript, TailwindCSS, JetBrains Mono
-* **Image Synthesis**: Local ComfyUI (SD1.5/SDXL), Stability AI REST API, ComfyUI Org API
-* **Testing Framework**: PyTest (19 tests, 100% pass rate)
+* **Image Synthesis**: Local ComfyUI (SD1.5/SDXL), Stability AI REST API, ComfyUI Org API, PIL editorial card fallback
+* **Testing Framework**: PyTest (45 tests, 100% pass rate), including regression coverage for content quality, image prompts and credential encryption
+
+---
+
+## 4a. Operational Lifecycle & Tooling
+
+The project ships install / start / stop scripts for both platforms. `start` performs its
+own build phase, so a clean checkout reaches a running server in one command.
+
+| Action | Windows | Linux / macOS |
+|---|---|---|
+| Install | `.\scripts\install.ps1` | `./scripts/install.sh` |
+| Build + Start | `.\scripts\start.ps1` | `./scripts/start.sh` |
+| Stop | `.\scripts\stop.ps1` | `./scripts/stop.sh` |
+
+* **Build phase** (inside `start`): provisions `.venv`, reinstalls dependencies when the
+  SHA-256 of `requirements.txt` differs from the recorded value, and initializes the database.
+* **Readiness gate**: `start` polls `GET /api/health` and only reports success once the
+  server answers. On failure it prints the captured server log rather than exiting silently.
+* **Process tracking**: PID and port are recorded in `.run/`; `stop` issues an in-app
+  emergency agent halt before terminating, and falls back to the port listener if the PID
+  file is stale. Both scripts are idempotent.
+* **Binding**: overridable via `SMM_HOST` / `SMM_PORT` or the script flags.
+
+**Execution model**: the engine boots HIBERNATING and runs the pipeline only on an explicit
+manual trigger (dashboard **Execute Cycle**, `POST /api/trigger`, or the MCP
+`trigger_full_cycle` tool). Scheduled autonomous execution is deferred until manual runs
+are validated.
 
 ---
 
 ## 5. Security & Data Protection Standards
 
-* **Credential Storage**: All API keys (OpenAI, Gemini, Anthropic, Stability AI, Twitter, LinkedIn, Reddit, Discord) are encrypted in SQLite using `SecurityManager` (`ENC:...` cipher).
-* **Payload Sanitization**: Automatic stripping of script tags, control chars, and prompt injection attempts on input, with sensitive token redaction on output.
+* **Credential Storage**: All API keys (OpenAI, Gemini, Anthropic, Stability AI, ComfyUI Org, Tavily, and platform tokens) are encrypted in SQLite using `SecurityManager` (`ENC:v2:` Fernet tokens; legacy `ENC:` records remain readable).
+* **Master Key**: Held in `.env.secret` or `SMM_MASTER_KEY`. The file is git-ignored and must never be committed. If it is ever exposed, rotate every stored credential.
+* **Key Handling in the UI**: `GET /api/provider-config` returns only whether each credential is set, never the decrypted value. Submitting a blank field preserves the stored key instead of erasing it.
+* **Payload Sanitization**: Automatic stripping of script/iframe tags, control chars, and prompt injection scaffolding on input, with provider token redaction on output.
 * **Authentication**: Google OAuth 2.0 integration with conditional local bypass.
 
 ---
 
 ## 6. Success Metrics & Quality Control
 
-* **CTR Target**: >90% estimated click-through rate.
-* **AI Detection Score**: <0.10 (Humanized, natural copy).
+* **CTR Score**: Heuristic estimate from headline signals (power words, numerals, punctuation). It is a ranking aid, not a measured click-through rate, and is computed from the copy that was actually produced.
+* **AI Detection Score**: Heuristic estimate from trope frequency and sentence-length variance. Target < 0.35 at the QA gate; drafts above it are rewritten or held for review.
+* **Factual Grounding**: Generated copy must derive only from the verified facts attached to the story. No cross-contamination between articles.
+* **Visual Relevance**: Every `image_prompt` is derived from its own article's subject matter, and an `image_path` is recorded only when a decodable file exists on disk.
 * **Network Traffic Efficiency**: 0 unrequested background network scans when in Hibernation mode.
+
+> Note: the CTR and AI-detection figures are internal heuristics computed locally. They are not validated against a third-party AI detector or live engagement data.

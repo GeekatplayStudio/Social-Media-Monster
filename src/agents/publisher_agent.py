@@ -34,11 +34,34 @@ class PublisherAgent:
         return published_count
 
     def _publish_to_platform(self, draft: PostDraft) -> bool:
-        # Mock/API dispatch for supported platforms
         platform_cfg = self.config.get(draft.platform, {})
         if not platform_cfg.get("enabled", True):
             log_event("PublisherAgent", f"Platform {draft.platform.upper()} is disabled in config.")
             return False
 
+        # Refuse to "publish" against placeholder credentials. Reporting success for a
+        # channel that was never configured makes a demo run look like a live one.
+        if not self._has_real_credentials(platform_cfg):
+            log_event(
+                "PublisherAgent",
+                f"Platform {draft.platform.upper()} still holds placeholder credentials. Dispatch skipped.",
+                level="WARNING",
+            )
+            return False
+
         log_event("PublisherAgent", f"Simulated live publication of '{draft.headline}' to {draft.platform.upper()}")
         return True
+
+    @staticmethod
+    def _has_real_credentials(platform_cfg: dict) -> bool:
+        credential_keys = [
+            k for k in platform_cfg
+            if any(token in k for token in ("key", "secret", "token", "password", "id", "urn"))
+        ]
+        if not credential_keys:
+            return False
+        return any(
+            str(platform_cfg.get(k, "")).strip()
+            and not str(platform_cfg.get(k, "")).upper().startswith("YOUR_")
+            for k in credential_keys
+        )

@@ -5,8 +5,23 @@ from src.core.models import VerifiedNews, PostDraft, SystemSetting, TrendItem
 from src.core.llm_client import LLMClient
 from src.agents.research_agent import ResearchAgent
 from src.agents.verifier_agent import VerifierAgent
+from src.agents.humanizer_agent import HumanizerAgent
 
 ALL_PLATFORMS = ["twitter", "instagram", "facebook", "youtube", "telegram", "linkedin", "reddit", "discord", "wordpress"]
+
+# Channel-native briefs. Without these every platform received an identical instruction
+# and the model had no reason to produce anything but the same post nine times.
+PLATFORM_BRIEFS = {
+    "twitter": "Under 280 characters total. One sharp hook line, one concrete detail, at most 2 hashtags. No preamble.",
+    "instagram": "Caption voice. Short lines with breathing room, a vivid opening image, 5-8 hashtags in a block at the end.",
+    "facebook": "Conversational, 2-4 short paragraphs, plain language, close with a genuine question to the reader.",
+    "youtube": "Community post. Punchy update, 2-3 bullet lines, end with a poll or a direct callout to subscribers.",
+    "telegram": "Fast broadcast. Bold the headline, 3 tight bullet lines, no fluff, no hashtags.",
+    "linkedin": "Professional analysis. Strong first line, 3-5 structured bullets with specifics, one takeaway line, 3-4 industry hashtags.",
+    "reddit": "Technical breakdown for a dev subreddit. Markdown headers, real detail, no marketing tone, no hashtags, end with a genuine discussion question.",
+    "discord": "Announcement. Bold title, short blockquote bullets, casual and direct, no hashtags.",
+    "wordpress": "Full blog article, 500-800 words, markdown H2 subheadings, an intro, analysis with specifics, and a conclusion.",
+}
 
 class WriterAgent:
     """
@@ -61,6 +76,11 @@ class WriterAgent:
                     session.add(draft)
                     generated_count += 1
 
+                # Mark the story as written. Without this the same verified news is
+                # re-drafted on every cycle, multiplying identical posts indefinitely.
+                item.status = "drafted"
+                session.add(item)
+
             session.commit()
 
         log_event("WriterAgent", f"Writer cycle complete. Drafted {generated_count} tailored posts across all platforms.", level="SUCCESS")
@@ -96,9 +116,14 @@ class WriterAgent:
             new_draft = self._generate_draft_for_platform(news, draft.platform, draft.persona_key, eq, sample_article)
             draft.headline = new_draft.headline
             draft.content = new_draft.content
-            draft.ctr_score = 94.5
-            draft.ai_detection_score = 0.04
-            draft.status = "approved"
+
+            # Score the copy that was actually produced. The previous version stamped a
+            # fixed 94.5% CTR / 0.04 AI score and auto-approved, so the dashboard reported
+            # results that had never been measured and the QA gate was bypassed.
+            scorer = HumanizerAgent()
+            draft.ai_detection_score = scorer._estimate_ai_score(draft.content)
+            draft.ctr_score = scorer._calculate_ctr_score(draft.headline, draft.content)
+            draft.status = "draft"
 
             session.add(draft)
             session.commit()
@@ -135,6 +160,8 @@ class WriterAgent:
 
         sample_prompt = f"\nAuthor Sample Article (Clone this exact style):\n\"\"\"{sample_article[:1000]}\"\"\"\n" if sample_article else ""
 
+        brief = PLATFORM_BRIEFS.get(platform, "Write a clear, specific post for this channel.")
+
         prompt = (
             f"Headline: {news.headline}\n"
             f"Verified Facts: {news.verified_facts}\n"
@@ -142,17 +169,21 @@ class WriterAgent:
             f"Target Platform: {platform}\n\n"
             f"{eq_summary}\n"
             f"{sample_prompt}\n"
-            f"Task: Write a short, high-converting post tailored for {platform}. "
-            f"Incorporate the author's writing fingerprint and exact equalizer fine-tuning profile."
+            f"Task: Write one post for {platform}.\n"
+            f"Channel brief: {brief}\n"
+            f"Ground every sentence in the verified facts above - do not invent numbers, "
+            f"companies, product names or quotes that are not there. Do not write a preamble, "
+            f"do not explain what you are doing, and output only the post itself."
         )
 
         system_prompt = (
-            f"You are a master copywriter fine-tuned with precision equalizer controls. "
-            f"Adhere strictly to the requested style slider values and sample article voice."
+            f"You are a master copywriter fine-tuned with precision equalizer controls, writing for {platform}. "
+            f"Adhere strictly to the requested style slider values and sample article voice. "
+            f"You never fabricate facts and you never output meta-commentary."
         )
 
-        content = self.llm.generate(prompt, system_prompt=system_prompt, platform=platform)
-        headline = f"{news.headline} [{platform.upper()}]"
+        content = self.llm.generate(prompt, system_prompt=system_prompt, platform=platform, task="post")
+        headline = news.headline
 
         return PostDraft(
             verified_news_id=news.id,

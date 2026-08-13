@@ -18,9 +18,14 @@ class TrafficControllerAgent:
 
     def evaluate_traffic_policy(self) -> dict:
         with Session(engine) as session:
-            ready_posts = session.exec(select(PostDraft).where(PostDraft.status == "approved")).all()
-            unapproved_posts = session.exec(select(PostDraft).where(PostDraft.status == "draft")).all()
-            total_queue = len(ready_posts) + len(unapproved_posts)
+            # Count every post still occupying the pipeline. Checking only "draft" and
+            # "approved" missed the intermediate stages, so the queue looked empty and
+            # scanning continued even when work was already backed up.
+            pending_states = ["draft", "humanized", "needs_review", "approved"]
+            queued = session.exec(
+                select(PostDraft).where(PostDraft.status.in_(pending_states))
+            ).all()
+            total_queue = len(queued)
 
             # If we already have sufficient quality articles accepted, halt web traffic
             if total_queue >= self.max_pending_threshold:

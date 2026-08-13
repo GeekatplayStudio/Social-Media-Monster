@@ -10,6 +10,7 @@ from sqlmodel import Session, select, desc
 from src.core.db import engine, init_db, log_event, load_config, DEFAULT_EQUALIZER
 from src.core.models import PostDraft, PersonaProfile, SystemLog, SystemSetting
 from src.core.security import SecurityManager
+from src.core.llm_client import _CIRCUIT
 from src.agents.super_agent import SuperAgent
 from src.mcp.server import SocialMediaMonsterMCP
 
@@ -102,14 +103,31 @@ def google_callback(code: str = None):
 
     return RedirectResponse("/?auth=success")
 
+CREDENTIAL_FIELDS = (
+    "openai_api_key", "gemini_api_key", "anthropic_api_key",
+    "stability_api_key", "comfy_org_api_key", "tavily_api_key",
+)
+
+
 @app.post("/api/provider-config")
 def save_provider_config(data: dict):
-    # Encrypt all API keys before persisting to SQLite
-    data["openai_api_key"] = security.encrypt_credential(data.get("openai_api_key", ""))
-    data["gemini_api_key"] = security.encrypt_credential(data.get("gemini_api_key", ""))
-    data["anthropic_api_key"] = security.encrypt_credential(data.get("anthropic_api_key", ""))
-    data["stability_api_key"] = security.encrypt_credential(data.get("stability_api_key", ""))
-    data["comfy_org_api_key"] = security.encrypt_credential(data.get("comfy_org_api_key", ""))
+    # Encrypt all API keys before persisting to SQLite. An empty submitted field keeps
+    # the stored key rather than wiping it, so the UI can show masked placeholders.
+    existing = {}
+    with Session(engine) as session:
+        prior = session.exec(select(SystemSetting).where(SystemSetting.key_name == "abstract_provider_cfg")).first()
+        if prior and prior.value:
+            try:
+                existing = json.loads(prior.value)
+            except Exception:
+                existing = {}
+
+    for field in CREDENTIAL_FIELDS:
+        submitted = (data.get(field) or "").strip()
+        if submitted:
+            data[field] = security.encrypt_credential(submitted)
+        else:
+            data[field] = existing.get(field, "")
 
     with Session(engine) as session:
         setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "abstract_provider_cfg")).first()
@@ -121,6 +139,9 @@ def save_provider_config(data: dict):
         session.add(setting)
         session.commit()
         log_event("WebDashboard", f"Saved & encrypted Abstract Provider configuration (Host: {data.get('host_mode', 'local').upper()})", level="SUCCESS")
+
+    # Credentials or endpoint may have changed - retry providers that were marked down.
+    _CIRCUIT.reset()
     return {"status": "provider_config_saved", "host_mode": data.get("host_mode", "local")}
 
 @app.post("/api/stop")
@@ -259,7 +280,53 @@ def save_schedule(data: dict):
 @app.post("/api/posts/{post_id}/generate-image")
 def generate_single_test_image(post_id: int):
     image_path = super_agent.visual_agent.generate_single_test_image(post_id)
-    return {"status": "generated" if image_path else "error", "image_path": os.path.basename(image_path)}
+    return {
+        "status": "generated" if image_path else "error",
+        "image_path": os.path.basename(image_path) if image_path else "",
+    }
+
+
+@app.post("/api/posts/{post_id}/approve")
+def approve_post(post_id: int):
+    """
+    Final Content Manager sign-off. Without this route nothing ever reached the
+    'approved' state, so the PublisherAgent had no work and the pipeline dead-ended.
+    """
+    with Session(engine) as session:
+        post = session.get(PostDraft, post_id)
+        if not post:
+            raise HTTPException(status_code=404, detail="Post draft not found")
+        post.status = "approved"
+        session.add(post)
+        session.commit()
+        log_event("WebDashboard", f"Post #{post_id} ({post.platform}) approved for publication.", level="SUCCESS")
+
+    published = 0
+    if super_agent.mode == "production":
+        published = super_agent.publisher_agent.run()
+    return {"status": "approved", "post_id": post_id, "published": published}
+
+
+@app.post("/api/posts/{post_id}/reject")
+def reject_post(post_id: int):
+    with Session(engine) as session:
+        post = session.get(PostDraft, post_id)
+        if not post:
+            raise HTTPException(status_code=404, detail="Post draft not found")
+        post.status = "rejected"
+        session.add(post)
+        session.commit()
+        log_event("WebDashboard", f"Post #{post_id} ({post.platform}) rejected by operator.", level="WARNING")
+    return {"status": "rejected", "post_id": post_id}
+
+
+@app.post("/api/publish")
+def publish_approved_posts():
+    """Dispatch every approved draft through the PublisherAgent."""
+    if super_agent.mode != "production":
+        return {"status": "skipped", "reason": "System is in DEMO mode. Switch to PRODUCTION to publish.", "published": 0}
+    published = super_agent.publisher_agent.run()
+    return {"status": "published", "published": published}
 
 @app.post("/api/posts/{post_id}/generate-article")
 def generate_single_test_article(post_id: int):
@@ -272,6 +339,21 @@ def trigger_scan_only(background_tasks: BackgroundTasks):
     background_tasks.add_task(super_agent.research_agent.run)
     return {"status": "scan_started"}
 
+@app.get("/api/health")
+def health_check():
+    """Lightweight readiness probe used by the start script and by uptime checks."""
+    from src.core.tavily_client import TavilyClient
+    with Session(engine) as session:
+        post_count = len(session.exec(select(PostDraft.id)).all())
+    return {
+        "status": "ok",
+        "mode": super_agent.mode,
+        "stage": super_agent.telemetry.get("current_stage"),
+        "posts": post_count,
+        "research_engine": "tavily" if TavilyClient().is_configured() else "rss",
+    }
+
+
 @app.get("/api/logs")
 def get_logs():
     with Session(engine) as session:
@@ -283,16 +365,54 @@ def get_telemetry():
     return super_agent.telemetry
 
 @app.get("/api/posts")
-def get_posts():
+def get_posts(limit: int = 60, status: str = None, platform: str = None):
+    """
+    The old fixed limit of 15 was smaller than a single cycle's output (9 platforms per
+    story), so most generated posts were invisible and platform filters looked empty.
+    """
+    limit = max(1, min(limit, 500))
     with Session(engine) as session:
-        posts = session.exec(select(PostDraft).order_by(desc(PostDraft.id)).limit(15)).all()
+        query = select(PostDraft)
+        if status:
+            query = query.where(PostDraft.status == status)
+        if platform:
+            query = query.where(PostDraft.platform == platform)
+        posts = session.exec(query.order_by(desc(PostDraft.id)).limit(limit)).all()
+
         result = []
         for p in posts:
             p_dict = p.model_dump()
-            if p_dict.get("image_path"):
-                p_dict["image_path"] = p_dict["image_path"].replace("\\", "/").split("/")[-1]
+            filename = (p_dict.get("image_path") or "").replace("\\", "/").split("/")[-1]
+            # Only advertise an image the server can actually serve.
+            if filename and os.path.exists(os.path.join(images_dir, filename)):
+                p_dict["image_path"] = filename
+            else:
+                p_dict["image_path"] = None
             result.append(p_dict)
         return result
+
+
+@app.get("/api/provider-config")
+def get_provider_config():
+    """Returns provider settings with credentials masked - never the decrypted keys."""
+    payload = {
+        "provider": "ollama", "host_mode": "local",
+        "base_url": "http://127.0.0.1:11434", "model_name": "llama3",
+    }
+    with Session(engine) as session:
+        setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "abstract_provider_cfg")).first()
+        if setting and setting.value:
+            try:
+                stored = json.loads(setting.value)
+                payload.update({k: v for k, v in stored.items() if k not in CREDENTIAL_FIELDS})
+            except Exception:
+                stored = {}
+        else:
+            stored = {}
+
+    for field in CREDENTIAL_FIELDS:
+        payload[f"{field}_set"] = bool(stored.get(field))
+    return payload
 
 @app.post("/api/mode")
 def update_mode(data: dict):

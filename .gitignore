@@ -1,3 +1,4 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -5,7 +6,33 @@ __pycache__/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Databases & runtime state
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.bak
 *.log
+.run/
+
+# Secrets - never commit these
 .env
+.env.*
+.env.secret
+
+# Generated output
 data/outputs/images/test_post_*.png
+data/vector_db/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
