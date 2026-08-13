@@ -4,6 +4,7 @@ Regression tests for the defects fixed in the content-quality pass.
 Each test pins one specific bug so it cannot silently return.
 """
 import os
+import json
 import pytest
 from sqlmodel import Session, select, delete
 
@@ -102,14 +103,24 @@ def test_each_platform_produces_distinct_copy():
 # --------------------------------------------------------------- image prompts
 
 def test_image_prompts_are_story_specific():
-    """Three keyword branches used to return one of three fixed strings."""
+    """
+    Three keyword branches used to return one of three fixed strings. Prompts are now
+    composed from the story's action and actors, so two unrelated articles must not
+    produce the same scene.
+    """
     a = VisualAgent._build_vivid_comfy_prompt(
-        "OpenAI ships Sora 2 with 4K video generation", "Physics aware rendering.", "16:9")
+        "OpenAI ships Sora 2 with 4K video generation",
+        "The text-to-video diffusion model renders minute-long clips.", "16:9")
     b = VisualAgent._build_vivid_comfy_prompt(
-        "Rust 1.90 stabilises async closures", "Language team lands the feature.", "16:9")
+        "Regulators fine a cloud provider under the new data statute",
+        "The court imposed a penalty following an antitrust ruling.", "16:9")
+
     assert a != b
-    assert "sora" in a.lower()
-    assert "rust" in b.lower()
+    # The action drives the staging: media generation vs a legal proceeding.
+    assert "loom" in a.lower() or "atelier" in a.lower()
+    assert "senate" in b.lower() or "statute" in b.lower()
+    # The actor is named rather than dumped as a keyword list.
+    assert "openai" in a.lower()
 
 
 def test_image_prompt_honours_aspect_ratio():
@@ -117,6 +128,79 @@ def test_image_prompt_honours_aspect_ratio():
     tall = VisualAgent._build_vivid_comfy_prompt("Story headline here", "body", "4:5")
     assert "cinematic" in wide
     assert "vertical" in tall
+
+
+def test_checkpoint_preference_favours_modern_models(monkeypatch):
+    """
+    Auto-detect used to try "v1-5" first, so a machine with SDXL and Flux installed still
+    rendered on SD 1.5 and produced duplicated, tiled output.
+    """
+    available = [
+        "flux1-dev-fp8.safetensors",
+        "sd_xl_base_1.0.safetensors",
+        "v1-5-pruned-emaonly-fp16.safetensors",
+        "stable_audio_3_medium.safetensors",
+    ]
+    agent = VisualAgent.__new__(VisualAgent)
+    agent.config = {}
+    agent.server_address = "127.0.0.1:8188"
+
+    payload = {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [available]}}}}
+
+    class FakeResponse:
+        status = 200
+        def read(self): return json.dumps(payload).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr("src.agents.visual_agent.urllib.request.urlopen", lambda *a, **k: FakeResponse())
+    assert agent._auto_detect_comfyui_checkpoint() == "sd_xl_base_1.0.safetensors"
+
+
+def test_explicit_checkpoint_config_wins(monkeypatch):
+    available = ["sd_xl_base_1.0.safetensors", "flux1-dev-fp8.safetensors"]
+    agent = VisualAgent.__new__(VisualAgent)
+    agent.config = {"checkpoint": "flux1-dev-fp8.safetensors"}
+    agent.server_address = "127.0.0.1:8188"
+
+    payload = {"CheckpointLoaderSimple": {"input": {"required": {"ckpt_name": [available]}}}}
+
+    class FakeResponse:
+        status = 200
+        def read(self): return json.dumps(payload).encode()
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr("src.agents.visual_agent.urllib.request.urlopen", lambda *a, **k: FakeResponse())
+    assert agent._auto_detect_comfyui_checkpoint() == "flux1-dev-fp8.safetensors"
+
+
+def test_sd15_requests_are_capped_to_its_native_range():
+    """SD 1.5 duplicates the subject above ~768px, which looked like a tiled asset sheet."""
+    agent = VisualAgent.__new__(VisualAgent)
+    agent.active_checkpoint = "v1-5-pruned-emaonly-fp16.safetensors"
+    w, h = agent._fit_resolution(1344, 768)
+    assert max(w, h) <= 768
+    assert w % 64 == 0 and h % 64 == 0
+
+
+def test_sdxl_keeps_its_native_resolution():
+    agent = VisualAgent.__new__(VisualAgent)
+    agent.active_checkpoint = "sd_xl_base_1.0.safetensors"
+    assert agent._fit_resolution(1344, 768) == (1344, 768)
+
+
+def test_negative_prompt_suppresses_sprite_sheets():
+    from src.agents.visual_agent import DEFAULT_NEGATIVE_PROMPT
+    for term in ("sprite sheet", "tileset", "grid", "watermark", "text"):
+        assert term in DEFAULT_NEGATIVE_PROMPT
+
+
+def test_scene_prompt_asks_for_one_illustration_not_tiles():
+    prompt = VisualAgent._build_vivid_comfy_prompt(
+        "Anthropic adds watermarks to Claude output", "Invisible marks in generated text.", "16:9")
+    assert "single cohesive" in prompt.lower()
+    assert "isometric" not in prompt.lower(), "isometric wording pulls the model toward tile layouts"
 
 
 def test_corrupt_image_payload_is_rejected_not_reported_as_success(tmp_path):
@@ -220,6 +304,9 @@ def test_unreachable_provider_is_probed_once_not_once_per_call(monkeypatch):
     """
     from src.core import llm_client as mod
 
+    # This test is specifically about provider dispatch, so the session-wide offline
+    # switch has to be lifted for it.
+    monkeypatch.delenv("SMM_DISABLE_LLM", raising=False)
     mod._CIRCUIT.reset()
     attempts = {"count": 0}
 

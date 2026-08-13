@@ -52,6 +52,11 @@ class TavilyClient:
         self._cached_key = None
 
     def _resolve_api_key(self) -> str:
+        # Hard off switch for tests and offline runs. Checked before the stored key so a
+        # saved credential cannot cause unintended billed searches.
+        if os.environ.get("SMM_DISABLE_TAVILY"):
+            return ""
+
         # 1. Encrypted dashboard config
         try:
             with Session(engine) as session:

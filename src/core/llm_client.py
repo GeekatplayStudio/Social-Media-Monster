@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import time
@@ -8,6 +9,7 @@ from sqlmodel import Session, select
 from src.core.db import engine, log_event, load_config
 from src.core.models import SystemSetting
 from src.core.security import SecurityManager
+from src.core.article_analysis import analyze
 
 # Hard character ceilings enforced on generated copy, per channel.
 PLATFORM_LIMITS = {
@@ -115,6 +117,8 @@ class LLMClient:
     def __init__(self):
         self.config = load_config().get("llm", {})
         self.security = SecurityManager()
+        # Local models can take minutes to load on first use; cloud APIs answer far faster.
+        self.timeout = int(self.config.get("timeout_seconds", 300))
 
     def get_active_provider_config(self) -> dict:
         with Session(engine) as session:
@@ -161,7 +165,11 @@ class LLMClient:
         raw_output = ""
         endpoint = self._endpoint_id(provider, cfg)
 
-        if _CIRCUIT.is_open(endpoint):
+        if os.environ.get("SMM_DISABLE_LLM"):
+            # Escape hatch for tests and offline runs: exercise the deterministic
+            # synthesizer without depending on a model being installed and running.
+            raw_output = ""
+        elif _CIRCUIT.is_open(endpoint):
             # Known-unreachable: do not pay another connect timeout for this call.
             raw_output = ""
         else:
@@ -176,6 +184,12 @@ class LLMClient:
                 raw_output = self._call_ollama(sanitized_prompt, sanitized_sys_prompt, cfg)
 
         raw_output = (raw_output or "").strip()
+
+        # Clean before judging. A model answer that merely carried a stray hashtag echoed
+        # from the source post is salvageable; rejecting it outright threw away a good
+        # prompt and silently fell back to the weaker template.
+        if task == "image_prompt":
+            raw_output = self._scrub_image_prompt(raw_output)
 
         if not self._is_usable(raw_output, task):
             log_event(
@@ -211,8 +225,20 @@ class LLMClient:
         return True
 
     @staticmethod
+    def _scrub_image_prompt(text: str) -> str:
+        """Removes social furniture and answer prefixes so a usable prompt survives."""
+        if not text:
+            return ""
+        cleaned = re.sub(r'^\s*(?:prompt|image prompt|output)\s*[:\-]\s*', '', text.strip(), flags=re.IGNORECASE)
+        cleaned = cleaned.strip('`"\' \n')
+        cleaned = re.sub(r'#\w+', '', cleaned)
+        cleaned = re.sub(r'https?://\S+', '', cleaned)
+        cleaned = re.sub(r'(?:^|\s)[^.?!]*\?\s*$', '', cleaned).strip()
+        return re.sub(r'\s{2,}', ' ', cleaned)
+
+    @staticmethod
     def _looks_like_social_post(text: str) -> bool:
-        """An image prompt must not carry hashtags, engagement questions or link CTAs."""
+        """After scrubbing, anything still carrying hashtags or links is a post, not a prompt."""
         return bool(re.search(r'#\w+', text)) or "http" in text.lower() or text.count("?") > 1
 
     @staticmethod
@@ -229,23 +255,42 @@ class LLMClient:
 
     # ------------------------------------------------------------------ providers
 
+    @staticmethod
+    def _is_timeout(error: Exception) -> bool:
+        if isinstance(error, TimeoutError):
+            return True
+        reason = getattr(error, "reason", None)
+        if isinstance(reason, TimeoutError):
+            return True
+        return "timed out" in str(error).lower()
+
     def _call_ollama(self, prompt: str, system_prompt: str, cfg: dict) -> str:
+        base_url = cfg.get("base_url", "http://127.0.0.1:11434")
+        model = cfg.get("model_name") or self.config.get("model_name", "llama3")
         try:
-            base_url = cfg.get("base_url", "http://127.0.0.1:11434")
-            model = cfg.get("model_name", "llama3")
             url = f"{base_url}/api/generate"
             full_prompt = f"System: {system_prompt}\nUser: {prompt}" if system_prompt else prompt
             data = json.dumps({"model": model, "prompt": full_prompt, "stream": False}).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 if response.status == 200:
                     res = json.loads(response.read().decode('utf-8'))
                     out = res.get("response", "").strip()
                     if out:
                         return out
         except Exception as e:
-            log_event("LLMClient", f"Local Ollama connection skipped ({e}). Using offline synthesizer.", level="INFO")
-            _CIRCUIT.trip(self._endpoint_id("ollama", cfg))
+            if self._is_timeout(e):
+                # A large model loading from disk is slow, not absent. Tripping the breaker
+                # here would disable a working provider and silently downgrade every post.
+                log_event(
+                    "LLMClient",
+                    f"Ollama did not answer within {self.timeout}s for model '{model}'. "
+                    f"Large models need a longer llm.timeout_seconds, or keep the model warm.",
+                    level="WARNING",
+                )
+            else:
+                log_event("LLMClient", f"Local Ollama connection skipped ({e}). Using offline synthesizer.", level="INFO")
+                _CIRCUIT.trip(self._endpoint_id("ollama", cfg))
         return ""
 
     def _call_openai(self, prompt: str, system_prompt: str, cfg: dict) -> str:
@@ -260,7 +305,7 @@ class LLMClient:
             model = cfg.get("model_name") or "gpt-4o"
             data = json.dumps({"model": model, "messages": messages, "temperature": 0.7}).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json', 'Authorization': f'Bearer {api_key}'})
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 if response.status == 200:
                     res = json.loads(response.read().decode('utf-8'))
                     return res['choices'][0]['message']['content'].strip()
@@ -282,7 +327,7 @@ class LLMClient:
                 payload["systemInstruction"] = {"parts": [{"text": system_prompt}]}
             data = json.dumps(payload).encode('utf-8')
             req = urllib.request.Request(url, data=data, headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 if response.status == 200:
                     res = json.loads(response.read().decode('utf-8'))
                     return res['candidates'][0]['content']['parts'][0]['text'].strip()
@@ -315,7 +360,7 @@ class LLMClient:
                     'anthropic-version': '2023-06-01',
                 },
             )
-            with urllib.request.urlopen(req, timeout=60) as response:
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 if response.status == 200:
                     res = json.loads(response.read().decode('utf-8'))
                     parts = [b.get("text", "") for b in res.get("content", []) if b.get("type") == "text"]
@@ -431,7 +476,14 @@ class LLMClient:
         if not takeaways:
             takeaways = ""
 
-        bullets = self._sentences(facts, limit=4) or [facts]
+        # Rank by centrality rather than order of appearance, so the post leads with the
+        # point of the story instead of whatever sentence happened to come first.
+        analysis = analyze(headline, facts)
+        bullets = analysis["facts"] or self._sentences(facts, limit=4) or [facts]
+        lead = analysis["summary"] or bullets[0]
+
+        # Supporting points exclude the lead so the opening is not immediately repeated.
+        support = [b for b in bullets if b != lead] or bullets[1:]
 
         # A takeaway that merely restates the facts adds nothing and reads as padding.
         takeaway_line = ""
@@ -440,73 +492,92 @@ class LLMClient:
             candidate = first[0] if first else takeaways.strip()
             if candidate and candidate[:60].lower() not in facts.lower():
                 takeaway_line = candidate
+        if not takeaway_line:
+            takeaway_line = analysis["takeaway"] if analysis["takeaway"] not in bullets else ""
 
-        tags = self._hashtags(headline, facts)
+        # Hashtags come from named entities, not from arbitrary capitalised words, so a
+        # headline verb like "Add" can no longer become "#Add".
+        seen_tags, tag_list = set(), []
+        for entity in analysis["entities"]:
+            slug = re.sub(r'[^A-Za-z0-9]', '', entity)
+            # Skip near-duplicates such as #Claude / #ClaudeCode / #ClaudeCowork.
+            if len(slug) < 3 or any(slug.lower().startswith(s) or s.startswith(slug.lower())
+                                    for s in seen_tags):
+                continue
+            seen_tags.add(slug.lower())
+            tag_list.append("#" + slug)
+            if len(tag_list) == 3:
+                break
+        tags = " ".join(tag_list)
         p = (platform or "").lower()
 
         if p == "twitter":
-            body = f"{headline}\n\n{self._clip(bullets[0], 170)}"
-            if takeaway_line:
-                body += f"\n\nWhy it matters: {self._clip(takeaway_line, 100)}"
+            # Lead with the substance, not the headline: the headline is usually visible
+            # in the link preview anyway, so repeating it wastes the character budget.
+            body = self._clip(lead, 200)
+            if support:
+                body += f"\n\n{self._clip(support[0], 120)}"
             return f"{body}\n\n{tags}".strip()
 
         if p == "instagram":
-            lines = "\n".join(f"▪ {self._clip(b, 110)}" for b in bullets[:3])
+            lines = "\n".join(f"▪ {self._clip(b, 110)}" for b in support[:3])
             tail = self._clip(takeaway_line, 180) if takeaway_line else ""
-            return f"{headline}\n\n{lines}\n\n{tail}\n.\n.\n{tags}".strip()
+            return self._join_blocks(headline, lead, lines, tail, ".\n.", tags)
 
         if p == "facebook":
             return self._join_blocks(
-                headline,
-                "\n\n".join(bullets),
+                headline, lead,
+                "\n\n".join(support[:3]),
                 f"The takeaway: {takeaway_line}" if takeaway_line else "",
                 "What's your read on this? Drop a comment.",
                 tags,
             )
 
         if p == "youtube":
-            lines = "\n".join(f"• {self._clip(b, 120)}" for b in bullets[:3])
+            lines = "\n".join(f"• {self._clip(b, 120)}" for b in support[:3])
             return self._join_blocks(
-                f"📺 Community Update — {headline}", lines,
+                f"📺 Community Update — {headline}", lead, lines,
                 "Poll: does this change how you build? 👍 Yes / 👎 Not yet", tags,
             )
 
         if p == "telegram":
-            lines = "\n".join(f"▸ {self._clip(b, 140)}" for b in bullets[:3])
+            lines = "\n".join(f"▸ {self._clip(b, 140)}" for b in support[:3])
             return self._join_blocks(
-                f"**{headline}**", lines,
+                f"**{headline}**", lead, lines,
                 f"__{self._clip(takeaway_line, 160)}__" if takeaway_line else "",
             )
 
         if p == "linkedin":
-            lines = "\n".join(f"• {b}" for b in bullets[:4])
+            lines = "\n".join(f"• {b}" for b in support[:3])
             return self._join_blocks(
-                headline, lines,
+                headline, lead, lines,
                 f"Takeaway: {takeaway_line}" if takeaway_line else "",
                 "How is your team approaching this?", tags,
             )
 
         if p == "reddit":
-            lines = "\n\n".join(bullets[:5])
+            lines = "\n\n".join(support[:4])
             return self._join_blocks(
                 f"[Discussion] {headline}",
-                f"**What happened**\n\n{lines}",
+                f"**TL;DR** {lead}",
+                f"**Details**\n\n{lines}" if lines else "",
                 f"**Why it matters**\n\n{takeaway_line}" if takeaway_line else "",
                 "Has anyone here run into this in production? Curious what your setup looks like.",
             )
 
         if p == "discord":
-            lines = "\n".join(f"> {self._clip(b, 150)}" for b in bullets[:3])
+            lines = "\n".join(f"> {self._clip(b, 150)}" for b in support[:3])
             return self._join_blocks(
-                f"**{headline}**", lines,
+                f"**{headline}**", lead, lines,
                 f"*{self._clip(takeaway_line, 200)}*" if takeaway_line else "",
             )
 
         # wordpress / default long-form
         return self._join_blocks(
             f"# {headline}",
-            "\n\n".join(bullets),
-            f"## Key Takeaways\n\n{takeaway_line}" if takeaway_line else "",
+            f"**{lead}**",
+            "\n\n".join(support),
+            f"## Why it matters\n\n{takeaway_line}" if takeaway_line else "",
         )
 
     @staticmethod

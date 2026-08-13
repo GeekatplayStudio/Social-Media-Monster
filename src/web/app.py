@@ -410,6 +410,46 @@ def trigger_scan_only(background_tasks: BackgroundTasks):
     background_tasks.add_task(super_agent.research_agent.run)
     return {"status": "scan_started"}
 
+@app.get("/api/llm-status")
+def llm_status():
+    """
+    Reports whether the configured text provider is actually usable. A silently
+    unreachable endpoint or a model name that is not installed is the single biggest
+    cause of weak output, so it is surfaced explicitly rather than left to the logs.
+    """
+    cfg = super_agent.writer_agent.llm.get_active_provider_config()
+    provider = (cfg.get("provider") or "ollama").lower()
+    wanted = cfg.get("model_name") or ""
+
+    if provider != "ollama":
+        key_set = bool(cfg.get(f"{provider}_api_key"))
+        return {
+            "provider": provider, "reachable": key_set, "models": [],
+            "model_name": wanted, "model_installed": key_set,
+            "detail": "API key present" if key_set else "No API key configured",
+        }
+
+    base_url = cfg.get("base_url", "http://127.0.0.1:11434").rstrip("/")
+    try:
+        req = urllib.request.Request(f"{base_url}/api/tags")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            models = [m.get("name", "") for m in json.loads(resp.read()).get("models", [])]
+    except Exception as e:
+        return {
+            "provider": provider, "reachable": False, "models": [],
+            "model_name": wanted, "model_installed": False,
+            "detail": f"Cannot reach {base_url} ({e}). Run 'ollama serve'.",
+        }
+
+    # Ollama resolves a bare name to its :latest tag.
+    installed = any(m == wanted or m.split(":")[0] == wanted.split(":")[0] for m in models)
+    return {
+        "provider": provider, "reachable": True, "models": models,
+        "model_name": wanted, "model_installed": installed,
+        "detail": "Ready" if installed else f"'{wanted}' is not installed. Available: {', '.join(models) or 'none'}",
+    }
+
+
 @app.get("/api/health")
 def health_check():
     """Lightweight readiness probe used by the start script and by uptime checks."""

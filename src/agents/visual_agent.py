@@ -8,6 +8,16 @@ import urllib.parse
 import hashlib
 from PIL import Image, ImageDraw, ImageFont
 
+# Suppresses the failure modes these prompts attract: tiled asset sheets, repeated
+# subjects, and baked-in lettering.
+DEFAULT_NEGATIVE_PROMPT = (
+    "sprite sheet, asset sheet, tileset, tile grid, character select screen, "
+    "multiple panels, split screen, collage, repeated duplicate objects, "
+    "grid layout, contact sheet, storyboard, thumbnails, "
+    "text, lettering, caption, watermark, signature, logo, ui overlay, "
+    "blurry, low quality, distorted, deformed, jpeg artifacts, cropped"
+)
+
 # Rendered pixel dimensions per aspect ratio, kept on SDXL-friendly multiples of 64.
 ASPECT_DIMENSIONS = {
     "16:9": (1344, 768),
@@ -55,6 +65,7 @@ from sqlmodel import Session, select
 from src.core.db import engine, log_event, load_config
 from src.core.models import PostDraft, SystemSetting
 from src.core.llm_client import LLMClient
+from src.core.article_analysis import build_visual_brief
 
 class VisualAgent:
     """
@@ -70,6 +81,9 @@ class VisualAgent:
         self.llm = LLMClient()
         self.comfy_poll_attempts = int(self.config.get("poll_attempts", 60))
         self.comfy_poll_interval = float(self.config.get("poll_interval_seconds", 2))
+        # "blurry, low quality, distorted" was too weak to suppress the sprite-sheet
+        # layouts these prompts otherwise attract.
+        self.negative_prompt = self.config.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         self.active_checkpoint = self._auto_detect_comfyui_checkpoint()
         os.makedirs(self.output_dir, exist_ok=True)
 
@@ -96,11 +110,23 @@ class VisualAgent:
                     data = json.loads(resp.read().decode('utf-8'))
                     ckpt_list = data.get("CheckpointLoaderSimple", {}).get("input", {}).get("required", {}).get("ckpt_name", [[]])[0]
                     if ckpt_list:
-                        # Prioritize SD1.5 and SDXL for standard CheckpointLoaderSimple
-                        for preferred in ["v1-5", "sd15", "sd_xl", "sdxl", "v2-1", "stable-diffusion", "flux"]:
+                        configured = self.config.get("checkpoint", "")
+                        if configured and configured in ckpt_list:
+                            return configured
+
+                        # Best model first. The old order tried "v1-5" first, so a machine
+                        # with SDXL and Flux installed still rendered on SD 1.5 - which
+                        # duplicates subjects badly above its native 512px and produced
+                        # the tiled "asset sheet" look instead of a single scene.
+                        for preferred in ["sd_xl_base", "sdxl", "sd_xl", "flux1-dev", "flux",
+                                          "hidream", "zimage", "v2-1", "v1-5", "sd15"]:
                             for name in ckpt_list:
                                 if preferred in name.lower():
                                     return name
+                        # Skip non-image checkpoints when falling back.
+                        for name in ckpt_list:
+                            if not any(x in name.lower() for x in ("audio", "3d", "ltx", "sam", "pose", "heightmap")):
+                                return name
                         return ckpt_list[0]
         except Exception:
             pass
@@ -162,6 +188,34 @@ class VisualAgent:
             session.commit()
             log_event("VisualAgent", f"Image generation produced no file for Post #{draft.id} via [{provider.upper()}]", level="ERROR")
             return ""
+
+    def _queue_position(self, prompt_id: str):
+        """
+        How many jobs sit ahead of ours, or None when the prompt is no longer queued.
+        ComfyUI is often shared with other tools, so 'slow' usually means 'busy'.
+        """
+        try:
+            req = urllib.request.Request(f"http://{self.server_address}/queue")
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception:
+            return None
+
+        running = data.get("queue_running", []) or []
+        pending = data.get("queue_pending", []) or []
+
+        def entry_id(entry):
+            try:
+                return str(entry[1])
+            except (IndexError, TypeError):
+                return ""
+
+        for index, entry in enumerate(pending):
+            if entry_id(entry) == prompt_id:
+                return len(running) + index
+        if any(entry_id(e) == prompt_id for e in running):
+            return 0
+        return None
 
     @staticmethod
     def _is_usable_prompt(prompt: str) -> bool:
@@ -248,33 +302,45 @@ class VisualAgent:
     @classmethod
     def _build_vivid_comfy_prompt(cls, headline: str, content: str, aspect_ratio: str = "1:1") -> str:
         """
-        Builds a scene description grounded in the actual article. The old version returned
-        one of three fixed strings by keyword, so every AI story produced an identical image.
+        Builds a scene from what the article actually reports.
+
+        The article analyser identifies the story's ACTION (a watermarking story is
+        'provenance', a lawsuit is 'regulation') and its SUBJECT (the organisations and
+        products involved), so the scene depicts this specific event rather than generic
+        "AI" imagery driven by the word "model" appearing somewhere in the text.
         """
         clean_title = re.sub(
             r'^\s*(?:\[[^\]]+\]|Headline:|Deep Dive:|#+)\s*', '', (headline or '')
         ).strip()
         clean_title = re.sub(r'\s*\[[A-Z]+\]\s*$', '', clean_title).strip()
 
-        combined = f"{clean_title} {content or ''}"
-        motif = cls._select_scene_motif(combined)
-        terms = cls._extract_subject_terms(clean_title, content)
-        subject = ", ".join(terms[:5]) if terms else clean_title[:70]
+        brief = build_visual_brief(clean_title, content or "")
 
+        # Who the scene is about, phrased as staging rather than a keyword list.
+        if brief["subject"] and brief["supporting"]:
+            actors = (f"The scene represents {brief['subject']} and {brief['supporting']} "
+                      f"as heraldic banners and emblems worked into the architecture.")
+        elif brief["subject"]:
+            actors = (f"The scene represents {brief['subject']} through a heraldic banner "
+                      f"and emblem worked into the architecture.")
+        else:
+            actors = ""
+
+        # "isometric" pulled the model toward tile/asset-sheet layouts. These describe a
+        # single framed illustration with one focal point instead.
         composition = {
-            "16:9": "wide cinematic establishing shot, strong horizontal parallax layers",
-            "1:1": "balanced centered isometric composition",
-            "4:5": "tall vertical composition with foreground framing",
-        }.get(aspect_ratio, "balanced centered isometric composition")
+            "16:9": "wide cinematic establishing shot of one continuous location, strong depth layers",
+            "1:1": "single centered composition with one clear focal point",
+            "4:5": "tall vertical composition, single subject framed by foreground detail",
+        }.get(aspect_ratio, "single centered composition with one clear focal point")
 
         return (
-            f"16-bit SNES-era RPG pixel art depicting {motif}, illustrating the story of "
-            f"\"{clean_title[:110]}\". Key visual motifs: {subject}. "
-            f"{composition}, hand-dithered shading, limited retro palette of deep indigo, "
-            f"cyan rim light and warm amber highlights, volumetric haze, CRT scanline grain, "
-            f"detailed sprite work, dark matte background, masterwork pixel artwork. "
-            f"No text, no lettering, no watermark, no logos."
-        )
+            f"A single cohesive 16-bit SNES-era RPG scene, one illustration: {brief['scene']}. "
+            f"Foreground details: {brief['props']}. {actors} "
+            f"{composition}, dramatic key lighting, hand-dithered shading, limited retro "
+            f"palette of deep indigo, cyan rim light and warm amber highlights, volumetric "
+            f"haze, subtle CRT scanline grain, detailed pixel artwork."
+        ).replace("  ", " ")
 
     @staticmethod
     def _write_image_bytes(raw: bytes, save_path: str) -> bool:
@@ -392,7 +458,35 @@ class VisualAgent:
                 return VisualAgent._extract_cloud_image_bytes(first)
         return b""
 
+    def _fit_resolution(self, width: int, height: int) -> tuple:
+        """
+        Keeps the request inside the checkpoint's native range.
+
+        SD 1.5 is a 512px model: asking it for 1024x1024 makes it repeat the subject
+        across the canvas, which is what produced tiled "asset sheet" images rather than
+        one coherent scene. SDXL and Flux are trained at ~1024 and are left alone.
+        """
+        name = (self.active_checkpoint or "").lower()
+        is_legacy_sd = any(tag in name for tag in ("v1-5", "sd15", "v2-1")) and "xl" not in name
+        cap = 768 if is_legacy_sd else 1344
+
+        longest = max(width, height)
+        if longest <= cap:
+            return width, height
+
+        scale = cap / longest
+        # Diffusion models expect multiples of 64.
+        fit_w = max(320, int(width * scale) // 64 * 64)
+        fit_h = max(320, int(height * scale) // 64 * 64)
+        log_event(
+            "VisualAgent",
+            f"Checkpoint '{self.active_checkpoint}' works best at or below {cap}px; "
+            f"rendering {fit_w}x{fit_h} instead of {width}x{height}.",
+        )
+        return fit_w, fit_h
+
     def _dispatch_comfyui_prompt(self, prompt_text: str, save_path: str, width: int = 1024, height: int = 1024) -> bool:
+        width, height = self._fit_resolution(width, height)
         try:
             # Vary the seed per prompt so re-rendering a different story cannot return a
             # cached identical image from a fixed seed.
@@ -409,7 +503,7 @@ class VisualAgent:
                 "4": {"inputs": {"ckpt_name": self.active_checkpoint}, "class_type": "CheckpointLoaderSimple"},
                 "5": {"inputs": {"width": width, "height": height, "batch_size": 1}, "class_type": "EmptyLatentImage"},
                 "6": {"inputs": {"text": prompt_text, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
-                "7": {"inputs": {"text": "blurry, low quality, distorted", "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+                "7": {"inputs": {"text": self.negative_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
                 "8": {"inputs": {"samples": ["3", 0], "vae": ["4", 2]}, "class_type": "VAEDecode"},
                 "9": {"inputs": {"filename_prefix": "SocialMonster_Test", "images": ["8", 0]}, "class_type": "SaveImage"}
             }
@@ -429,8 +523,10 @@ class VisualAgent:
             log_event("VisualAgent", f"Dispatched prompt #{prompt_id[:8]} to ComfyUI ({self.server_address})")
 
             # Poll history until the render lands. Diffusion on modest hardware regularly
-            # needs more than the old 12s budget.
-            for _ in range(self.comfy_poll_attempts):
+            # needs more than the old 12s budget, and the server may be busy with jobs
+            # submitted by other tools.
+            last_position = None
+            for attempt in range(self.comfy_poll_attempts):
                 time.sleep(self.comfy_poll_interval)
                 try:
                     h_req = urllib.request.Request(f"http://{self.server_address}/history/{prompt_id}")
@@ -440,6 +536,17 @@ class VisualAgent:
                         h_data = json.loads(h_resp.read().decode('utf-8'))
 
                     if prompt_id not in h_data:
+                        # Not executed yet. Report where we are in the queue instead of
+                        # leaving the user staring at a silent wait, then a card.
+                        if attempt % 10 == 0:
+                            position = self._queue_position(prompt_id)
+                            if position is not None and position != last_position:
+                                last_position = position
+                                log_event(
+                                    "VisualAgent",
+                                    f"ComfyUI is busy - prompt #{prompt_id[:8]} is queued "
+                                    f"behind {position} job(s).",
+                                )
                         continue
                     outputs = h_data[prompt_id].get("outputs", {}).get("9", {}).get("images", [])
                     if not outputs:
@@ -461,7 +568,23 @@ class VisualAgent:
 
             # Dispatching is not the same as producing a file. Reporting success here was
             # what left post records pointing at images that were never written.
-            log_event("VisualAgent", f"ComfyUI prompt #{prompt_id[:8]} produced no retrievable image in time.", level="WARNING")
+            waited = int(self.comfy_poll_attempts * self.comfy_poll_interval)
+            position = self._queue_position(prompt_id)
+            if position is not None:
+                log_event(
+                    "VisualAgent",
+                    f"ComfyUI prompt #{prompt_id[:8]} is STILL QUEUED after {waited}s "
+                    f"({position} job(s) ahead - the server is busy with other work). "
+                    f"The render will finish on its own; using the editorial card for now. "
+                    f"Raise comfyui.poll_attempts to wait longer.",
+                    level="WARNING",
+                )
+            else:
+                log_event(
+                    "VisualAgent",
+                    f"ComfyUI prompt #{prompt_id[:8]} did not return an image within {waited}s.",
+                    level="WARNING",
+                )
         except Exception as e:
             log_event("VisualAgent", f"Local ComfyUI dispatch failed: {e}", level="WARNING")
         return False

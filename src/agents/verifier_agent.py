@@ -5,6 +5,7 @@ from src.core.db import engine, log_event
 from src.core.models import TrendItem, VerifiedNews
 from src.core.llm_client import LLMClient
 from src.core.tavily_client import TavilyClient
+from src.core.article_analysis import analyze
 
 # Feed furniture and page chrome that adds no information to a story.
 # Tavily Extract returns markdown, so image embeds and link targets are stripped here -
@@ -111,6 +112,11 @@ class VerifierAgent:
         return self._clean(item.summary or "")
 
     def _extract_facts(self, headline: str, source_text: str) -> tuple:
+        # Deterministic analysis first: it ranks sentences by centrality instead of
+        # taking whichever came first, and it works with no model available.
+        analysis = analyze(headline, source_text)
+        extracted = "\n".join(f"- {f}" for f in analysis["facts"])
+
         prompt = (
             f"Headline: {headline}\n"
             f"Source Article: {source_text[:6000]}\n\n"
@@ -135,12 +141,19 @@ class VerifierAgent:
             task="facts",
         ).strip()
 
-        if len(facts) < self.MIN_FACT_CHARS:
-            facts = self._condense(source_text, sentences=4)
-        if len(takeaways) < 20:
-            takeaways = self._condense(source_text, sentences=1)
+        # Prefer the extractive result whenever the model added nothing better.
+        if len(facts) < self.MIN_FACT_CHARS or self._is_weaker(facts, extracted):
+            facts = extracted or self._condense(source_text, sentences=4)
+        if len(takeaways) < 20 or takeaways[:60] in facts:
+            takeaways = analysis["takeaway"] or self._condense(source_text, sentences=1)
 
         return self._clean(facts), self._clean(takeaways)
+
+    @staticmethod
+    def _is_weaker(candidate: str, extracted: str) -> bool:
+        """A model reply that merely echoes the prompt scaffolding is not an improvement."""
+        low = candidate.lower()
+        return low.startswith(("headline:", "source article:", "task:")) or len(candidate) < len(extracted) * 0.4
 
     @staticmethod
     def _condense(text: str, sentences: int = 3) -> str:

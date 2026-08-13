@@ -23,9 +23,12 @@ comfyui:
   workflow_type: "txt2img"
   default_width: 1024
   default_height: 1024
-  poll_attempts: 60            # History polls before giving up on a render
-  poll_interval_seconds: 2     # Seconds between history polls (60 x 2s = 2 min budget)
+  poll_attempts: 150           # History polls before giving up (covers queue wait + render)
+  poll_interval_seconds: 2     # Seconds between polls (150 x 2s = 5 min budget)
   max_images_per_cycle: 5      # Bulk auto-render cap per pipeline cycle
+  checkpoint: ""               # Force a checkpoint, e.g. "sd_xl_base_1.0.safetensors".
+                               # Blank auto-detects, preferring SDXL/Flux over SD 1.5.
+  negative_prompt: ""          # Blank uses the built-in anti sprite-sheet negative
 
 # Tavily Research API - live news discovery + full-article fact extraction.
 # The key is normally stored encrypted via the dashboard Provider Config panel.
@@ -44,7 +47,8 @@ tavily:
 llm:
   provider: "ollama"
   base_url: "http://127.0.0.1:11434"
-  model_name: "llama3"
+  model_name: "gemma3:12b"      # must be installed - check with `ollama list`
+  timeout_seconds: 300          # local models can take minutes to load on first call
   openai_api_key: ""
   gemini_api_key: ""
   anthropic_api_key: ""

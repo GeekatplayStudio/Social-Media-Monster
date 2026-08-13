@@ -80,6 +80,54 @@
 
 ---
 
+## 3a. Article Analysis Layer
+
+`src/core/article_analysis.py` determines what a story is actually about. It is
+deterministic and model-free, so quality degrades gracefully rather than collapsing when
+no LLM is reachable, and it gives a model structure to write against when one is.
+
+* **Chrome removal** — strips read-time badges, photo credits, share bars, "did not respond
+  to a request for comment", markdown image embeds and bare URL lines before any scoring.
+* **Centrality ranking** — sentences are scored on distinct headline-term coverage, thematic
+  term frequency, concrete detail (numbers, dates, versions), lead position and length
+  sanity. Sentences opening with a back-reference ("That includes…") are penalised because
+  they cannot stand alone as a summary. Headline coverage counts **distinct** terms, so
+  repetition no longer outranks substance.
+* **Deduplication** — near-identical sentences are dropped so a summary does not state one
+  point three ways.
+* **Entity extraction** — proper nouns and known organisations/products, bounded by sentence
+  edges so a run never spans a full stop, with filler trimmed from both ends.
+* **Concept detection** — maps the story's *action* to one of 16 concepts (provenance,
+  regulation, security, funding, benchmark, open-source, outage, hardware, agents, media
+  generation, training, storage, developer tooling, partnership, shutdown, general).
+  Triggers match at word starts with inflection tolerance, so "watermark" matches
+  "watermarking" while "ide" cannot fire inside "countryside".
+* **Visual brief** — combines concept (the action) with entities (the actors) into a
+  concrete scene. Concept words are excluded from the actor list, so "Watermarks" is staged
+  as the event rather than as a company.
+
+This is what makes an image depict *its own* article: a watermarking story becomes a
+scriptorium pressing a hidden sigil, not generic neural-network artwork chosen because the
+word "model" appeared somewhere in the text.
+
+**Rendering constraints that affect visual quality as much as the prompt:**
+
+* **Checkpoint preference** — auto-detection favours SDXL and Flux over SD 1.5. The prior
+  order tried SD 1.5 first, so a machine with better models installed still rendered on the
+  weakest one. Overridable via `comfyui.checkpoint`.
+* **Native resolution** — SD 1.5 is a 512px model and repeats its subject when pushed to
+  1024px, which reads as a tiled asset sheet. Requests are capped per checkpoint family
+  (768px legacy SD, 1344px SDXL/Flux).
+* **Negative prompt** — explicitly suppresses sprite sheets, tilesets, grid layouts,
+  collages and baked-in lettering. The previous `"blurry, low quality, distorted"` was too
+  weak to prevent them.
+* **Composition wording** — asks for a single cohesive illustration with one focal point.
+  The earlier "isometric composition" phrasing actively pulled models toward tile layouts.
+* **Shared servers** — when ComfyUI is busy with other work the agent reports its queue
+  position instead of failing silently, and uses the editorial card in the meantime.
+
+---
+
 ## 4a. Operational Lifecycle & Tooling
 
 The project ships install / start / stop scripts for both platforms. `start` performs its

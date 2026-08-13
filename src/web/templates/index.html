@@ -147,6 +147,21 @@
                         <label class="block text-gray-400 mb-1">Local / Custom Endpoint Base URL</label>
                         <input type="text" id="cfgBaseUrl" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" value="http://127.0.0.1:11434">
                     </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">
+                            Model Name
+                            <span id="cfgModelStatus" class="ml-2 text-[10px] font-bold uppercase text-gray-500"></span>
+                        </label>
+                        <div class="flex gap-2">
+                            <input list="cfgModelOptions" type="text" id="cfgModelName" class="flex-1 bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="gemma3:12b">
+                            <datalist id="cfgModelOptions"></datalist>
+                            <button onclick="detectModels()" class="px-3 py-2 bg-dark-4 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded-lg font-bold transition whitespace-nowrap" title="Query the endpoint for installed models">Detect</button>
+                        </div>
+                        <p class="text-[10px] text-gray-500 mt-1">
+                            Text quality depends almost entirely on this. With no model reachable the engine falls back to
+                            extractive summaries, which are accurate but plain. For Ollama, run <span class="text-gray-300 font-mono">ollama serve</span> first.
+                        </p>
+                    </div>
                 </div>
 
                 <button onclick="saveProviderConfig()" class="px-5 py-2.5 bg-gray-200 hover:bg-white text-gray-900 font-bold rounded-xl shadow transition">Save Provider Configuration</button>
@@ -645,7 +660,8 @@
                 stability_api_key: document.getElementById('cfgStabilityKey').value,
                 comfy_org_api_key: document.getElementById('cfgComfyOrgKey').value,
                 tavily_api_key: document.getElementById('cfgTavilyKey').value,
-                base_url: document.getElementById('cfgBaseUrl').value
+                base_url: document.getElementById('cfgBaseUrl').value,
+                model_name: document.getElementById('cfgModelName').value
             };
             await fetch('/api/provider-config', {
                 method: 'POST',
@@ -666,6 +682,8 @@
                 if (cfg.host_mode) document.getElementById('cfgHostMode').value = cfg.host_mode;
                 if (cfg.provider) document.getElementById('cfgProvider').value = cfg.provider;
                 if (cfg.base_url) document.getElementById('cfgBaseUrl').value = cfg.base_url;
+                if (cfg.model_name) document.getElementById('cfgModelName').value = cfg.model_name;
+                detectModels();
 
                 const badge = document.getElementById('cfgTavilyStatus');
                 if (badge) {
@@ -1008,6 +1026,31 @@
             await fetch(`/api/posts/${id}/generate-article`, { method: 'POST' });
             fetchPosts();
             fetchLogs();
+        }
+
+        // Asks the backend which models the configured endpoint actually has, so the
+        // model name cannot silently point at something that is not installed.
+        async function detectModels() {
+            const badge = document.getElementById('cfgModelStatus');
+            try {
+                const res = await fetch('/api/llm-status');
+                const s = await res.json();
+                const list = document.getElementById('cfgModelOptions');
+                if (list) list.innerHTML = (s.models || []).map(m => `<option value="${escapeHtml(m)}">`).join('');
+                if (!badge) return;
+                if (!s.reachable) {
+                    badge.innerText = 'endpoint unreachable';
+                    badge.className = 'ml-2 text-[10px] font-bold uppercase text-rose-400';
+                } else if (s.model_installed) {
+                    badge.innerText = `ready · ${s.models.length} model(s)`;
+                    badge.className = 'ml-2 text-[10px] font-bold uppercase text-emerald-400';
+                } else {
+                    badge.innerText = 'model not installed';
+                    badge.className = 'ml-2 text-[10px] font-bold uppercase text-amber-400';
+                }
+            } catch (e) {
+                if (badge) { badge.innerText = 'check failed'; badge.className = 'ml-2 text-[10px] font-bold uppercase text-rose-400'; }
+            }
         }
 
         // ------------------------------------------------ Channel Connections

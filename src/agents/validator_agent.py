@@ -4,6 +4,7 @@ from src.core.db import engine, log_event
 from src.core.models import PostDraft
 from src.core.llm_client import LLMClient
 from src.agents.visual_agent import VisualAgent
+from src.core.article_analysis import build_visual_brief
 
 # Phrases that mean the stored image_prompt is filler rather than a real scene description.
 GENERIC_PROMPT_MARKERS = [
@@ -72,13 +73,25 @@ class ValidatorAgent:
                 if self._needs_image_prompt(draft.image_prompt):
                     log_event("ValidatorAgent", f"Draft #{draft.id} image prompt is generic. Upgrading prompt for visual relevance...")
 
+                    # Give the model the article's analysed subject and action, otherwise it
+                    # tends to describe generic "AI" imagery regardless of the story.
+                    brief = build_visual_brief(draft.headline, draft.content)
+                    # Strip social furniture first: hashtags fed in tend to come back out in
+                    # the generated prompt, which then fails image-prompt validation.
+                    clean_summary = re.sub(r'#\w+|https?://\S+|[📺⚡🔥🚀💡📌]', '', draft.content)
+                    clean_summary = re.sub(r'\s{2,}', ' ', clean_summary).strip()
                     prompt_req = (
                         f"Article Headline: {draft.headline}\n"
-                        f"Post Content Summary: {draft.content[:400]}\n"
-                        f"Task: Write one single-paragraph image generation prompt describing a "
-                        f"16-bit RPG pixel art scene that depicts this exact story. Describe subject, "
-                        f"setting, lighting and palette only. Output the prompt text and nothing else. "
-                        f"Do not include hashtags, emoji, links, questions or marketing copy."
+                        f"Post Content Summary: {clean_summary[:400]}\n"
+                        f"Story subject: {brief['subject'] or 'unspecified'}\n"
+                        f"Story action: {brief['concept']}\n"
+                        f"Suggested staging: {brief['scene']}\n"
+                        f"Task: Write one single-paragraph image generation prompt for a 16-bit "
+                        f"SNES-era RPG pixel art scene that depicts THIS specific story - the "
+                        f"action above must be visually recognisable, not generic technology art. "
+                        f"Describe subject, setting, props, lighting and palette only. "
+                        f"Output the prompt text and nothing else. No hashtags, emoji, links, "
+                        f"questions, marketing copy or lettering in the image."
                     )
                     system_prompt = "You are a senior art director writing Flux/SDXL diffusion prompts. You output only the prompt."
                     new_prompt = self.llm.generate(
@@ -88,6 +101,7 @@ class ValidatorAgent:
                         task="image_prompt",
                     )
 
+                    new_prompt = self._scrub_image_prompt(new_prompt)
                     if self._is_valid_image_prompt(new_prompt):
                         draft.image_prompt = new_prompt.strip()
                         prompt_fixes += 1
@@ -133,6 +147,22 @@ class ValidatorAgent:
             return True
         # A prompt carrying hashtags or links is a social post that leaked into the field.
         return not self._is_valid_image_prompt(image_prompt)
+
+    @staticmethod
+    def _scrub_image_prompt(text: str) -> str:
+        """
+        Salvage a usable prompt instead of discarding it. Models often prefix their answer
+        or echo a stray hashtag; neither is a reason to fall back to a weaker prompt.
+        """
+        if not text:
+            return ""
+        cleaned = re.sub(r'^\s*(?:prompt|image prompt|output)\s*[:\-]\s*', '', text.strip(), flags=re.IGNORECASE)
+        cleaned = cleaned.strip('`"\' \n')
+        cleaned = re.sub(r'#\w+', '', cleaned)
+        cleaned = re.sub(r'https?://\S+', '', cleaned)
+        # Drop any trailing conversational question the model appended.
+        cleaned = re.sub(r'(?:^|\s)[^.?!]*\?\s*$', '', cleaned).strip()
+        return re.sub(r'\s{2,}', ' ', cleaned)
 
     @staticmethod
     def _is_valid_image_prompt(text: str) -> bool:

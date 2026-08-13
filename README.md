@@ -99,7 +99,55 @@ chmod +x scripts/*.sh
 
 The installer creates a `.venv`, installs dependencies, initializes the SQLite database, and generates the credential encryption key. It is safe to re-run — your data is never deleted.
 
-### 3. Running the Engine
+### 3. Choose a Text Model (this decides article quality)
+
+Output quality depends almost entirely on the text model. With no model reachable the
+engine still works, but it falls back to **extractive summaries** — accurate and grounded
+in the source, yet plainly worded.
+
+**Local (Ollama)**
+```bash
+ollama serve                 # must be running; the tray icon alone is not enough
+ollama list                  # the model in config must appear here
+ollama pull gemma3:12b       # if it does not
+```
+Then set the model in **⚙ → Abstract API Provider Layer → Model Name**. Press **Detect**
+to list what the endpoint actually has. The badge reads `ready`, `model not installed`, or
+`endpoint unreachable`, so a misconfigured model can't fail silently.
+
+> A 12B model needs ~30–60s on its first call while it loads into memory. `llm.timeout_seconds`
+> (default 300) covers this. A timeout is treated as "slow", not "down" — it will not disable
+> the provider.
+
+**Cloud** — paste an OpenAI, Gemini, or Anthropic key in the same panel and switch the
+provider dropdown. Cloud models are faster and need no local resources.
+
+### 3b. Image Rendering (ComfyUI)
+
+Set the engine under **⚙ → Image Engine**. For local ComfyUI, start it first; the agent
+auto-detects a checkpoint and **prefers SDXL or Flux over SD 1.5**.
+
+> **Model choice matters more than the prompt.** SD 1.5 is a 512px model — asking it for
+> 1024×1024 makes it repeat the subject across the canvas, which comes out looking like a
+> tiled asset sheet instead of one scene. Requests are automatically capped to a
+> checkpoint's native range (768px for SD 1.5, 1344px for SDXL/Flux).
+
+Pin a specific model in `config/config.yaml` if auto-detection picks the wrong one:
+```yaml
+comfyui:
+  checkpoint: "sd_xl_base_1.0.safetensors"
+  negative_prompt: ""       # blank uses the built-in anti sprite-sheet negative
+  poll_attempts: 150        # 150 x 2s = 5 minutes of queue wait + render
+```
+
+If ComfyUI is shared with other work, renders queue behind it. The log reports the queue
+position rather than failing silently, and falls back to the editorial card meanwhile:
+
+```
+ComfyUI prompt #374b3d95 is STILL QUEUED after 300s (3 job(s) ahead ...)
+```
+
+### 4. Running the Engine
 
 **Windows**
 ```powershell
@@ -132,7 +180,7 @@ Manual start without the scripts still works:
 python main.py                     # honours SMM_HOST / SMM_PORT
 ```
 
-### 4. Rotating the Credential Master Key
+### 5. Rotating the Credential Master Key
 
 `.env.secret` was tracked in git before `v1.1`, so that key must be treated as public. Rotate it:
 
@@ -145,7 +193,7 @@ The tool decrypts every stored credential with the current key, generates a new 
 
 > Rotation does **not** rewrite git history — the old key remains in past commits. Rotation is what makes it worthless against your current data. Credentials that also exist at the provider (OpenAI, Tavily, platform tokens) should additionally be regenerated in those dashboards.
 
-### 5. Connecting Your Social Accounts
+### 6. Connecting Your Social Accounts
 
 Open the dashboard, click the **⚙ gear** icon, then the **Channel Connections** tab. Each of the 9 channels has its own panel with the exact fields it needs, a link to its developer portal, and setup notes.
 
@@ -177,7 +225,7 @@ Publishing runs only in **PROD** mode, only for approved drafts, and only to cha
 >
 > **Instagram** requires the image to be fetchable at a public URL; it cannot read a file from your machine. Set *Public Image Base URL* to somewhere your generated images are actually served.
 
-### 6. Tavily is Optional
+### 7. Tavily is Optional
 
 The engine runs fully without a Tavily key — `ResearchAgent` falls back to Google News RSS and the tech feeds, and `VerifierAgent` works from feed summaries. Adding a key improves discovery relevance and gives the verifier full article bodies to extract facts from.
 
