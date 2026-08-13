@@ -1,7 +1,7 @@
 system:
   mode: "demo"                  # "demo" or "production"
   daemon_interval_minutes: 30  # Search and process interval
-  auto_publish: false          # If false, requires manual UI approval before posting
+  auto_publish: false          # Requires manual UI approval before posting if false
   max_posts_per_cycle: 3
 
 database:
@@ -16,10 +16,14 @@ comfyui:
   default_height: 1024
 
 llm:
-  provider: "ollama_or_openai" # supports local Ollama or OpenAI / Anthropic APIs
-  base_url: "http://127.0.0.1:11434" # Ollama local endpoint, or API key fallback
+  provider: "ollama"
+  base_url: "http://127.0.0.1:11434"
   model_name: "llama3"
-  api_key: ""
+  openai_api_key: ""
+  gemini_api_key: ""
+  anthropic_api_key: ""
+  stability_api_key: ""
+  comfy_org_api_key: ""
 
 personas:
   active_persona: "tech_visionary"
@@ -46,28 +50,87 @@ personas:
       political_stance: "neutral"
       writing_style: "Encouraging, clear step-by-step breakdowns, action-oriented tips, friendly conversational tone."
 
+# 9 Supported Multi-Platform Connection Credentials & Developer Links
 platforms:
   twitter:
     enabled: true
     max_length: 280
+    api_key: "YOUR_TWITTER_API_KEY"
+    api_secret: "YOUR_TWITTER_API_SECRET"
+    access_token: "YOUR_TWITTER_ACCESS_TOKEN"
+    access_token_secret: "YOUR_TWITTER_ACCESS_TOKEN_SECRET"
+    bearer_token: "YOUR_TWITTER_BEARER_TOKEN"
+    developer_portal_url: "https://developer.x.com/"
+    api_endpoint: "https://api.twitter.com/2/tweets"
+
   instagram:
     enabled: true
+    access_token: "YOUR_INSTAGRAM_GRAPH_ACCESS_TOKEN"
+    account_id: "YOUR_INSTAGRAM_BUSINESS_ACCOUNT_ID"
+    graph_api_version: "v19.0"
+    developer_portal_url: "https://developers.facebook.com/docs/instagram-api/"
+    api_endpoint: "https://graph.facebook.com/v19.0"
+
   facebook:
     enabled: true
+    page_access_token: "YOUR_FACEBOOK_PAGE_ACCESS_TOKEN"
+    page_id: "YOUR_FACEBOOK_PAGE_ID"
+    developer_portal_url: "https://developers.facebook.com/docs/pages-api/"
+    api_endpoint: "https://graph.facebook.com/v19.0"
+
   youtube:
     enabled: true
+    api_key: "YOUR_YOUTUBE_DATA_API_KEY"
+    channel_id: "YOUR_YOUTUBE_CHANNEL_ID"
+    client_secrets_file: "client_secrets.json"
+    oauth_scope: "https://www.googleapis.com/auth/youtube.force-ssl"
+    developer_portal_url: "https://console.cloud.google.com/apis/credentials"
+    api_endpoint: "https://www.googleapis.com/youtube/v3/posts"
+
   telegram:
     enabled: true
+    bot_token: "YOUR_TELEGRAM_BOT_TOKEN"
+    chat_id: "@YourChannelOrChatId"
+    channel_username: "SocialMediaMonsterNews"
+    developer_portal_url: "https://core.telegram.org/bots/api"
+    api_endpoint: "https://api.telegram.org/bot"
+
   linkedin:
     enabled: true
+    client_id: "YOUR_LINKEDIN_CLIENT_ID"
+    client_secret: "YOUR_LINKEDIN_CLIENT_SECRET"
+    access_token: "YOUR_LINKEDIN_OAUTH2_ACCESS_TOKEN"
+    organization_urn: "urn:li:organization:12345678"
+    author_urn: "urn:li:person:abcdefgh"
+    developer_portal_url: "https://developer.linkedin.com/"
+    api_endpoint: "https://api.linkedin.com/v2/ugcPosts"
+
   reddit:
     enabled: true
+    client_id: "YOUR_REDDIT_CLIENT_ID"
+    client_secret: "YOUR_REDDIT_CLIENT_SECRET"
+    username: "YOUR_REDDIT_USERNAME"
+    password: "YOUR_REDDIT_PASSWORD"
+    user_agent: "SocialMediaMonster/1.0 by YourName"
     target_subreddits: ["r/ArtificialIntelligence", "r/LocalLLaMA", "r/MachineLearning"]
+    developer_portal_url: "https://www.reddit.com/prefs/apps"
+    api_endpoint: "https://oauth.reddit.com/api/submit"
+
   discord:
     enabled: true
+    bot_token: "YOUR_DISCORD_BOT_TOKEN"
+    webhook_url: "https://discord.com/api/webhooks/YOUR_WEBHOOK_ID/YOUR_WEBHOOK_TOKEN"
+    channel_id: "YOUR_DISCORD_CHANNEL_ID"
+    developer_portal_url: "https://discord.com/developers/applications"
+    api_endpoint: "https://discord.com/api/v10/channels"
+
   wordpress:
     enabled: true
-    site_url: ""
+    site_url: "https://yourblog.com"
+    username: "YOUR_WP_USERNAME"
+    application_password: "YOUR_WP_APPLICATION_PASSWORD"
+    rest_api_endpoint: "https://yourblog.com/wp-json/wp/v2/posts"
+    developer_portal_url: "https://developer.wordpress.org/rest-api/"
 
 research_sources:
   rss_feeds:

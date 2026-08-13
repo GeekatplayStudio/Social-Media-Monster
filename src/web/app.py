@@ -173,7 +173,7 @@ def save_schedule(data: dict):
 @app.post("/api/posts/{post_id}/generate-image")
 def generate_single_test_image(post_id: int):
     image_path = super_agent.visual_agent.generate_single_test_image(post_id)
-    return {"status": "generated" if image_path else "error", "image_path": image_path}
+    return {"status": "generated" if image_path else "error", "image_path": os.path.basename(image_path)}
 
 @app.post("/api/scan")
 def trigger_scan_only(background_tasks: BackgroundTasks):
@@ -195,7 +195,13 @@ def get_telemetry():
 def get_posts():
     with Session(engine) as session:
         posts = session.exec(select(PostDraft).order_by(desc(PostDraft.id)).limit(15)).all()
-        return posts
+        result = []
+        for p in posts:
+            p_dict = p.model_dump()
+            if p_dict.get("image_path"):
+                p_dict["image_path"] = p_dict["image_path"].replace("\\", "/").split("/")[-1]
+            result.append(p_dict)
+        return result
 
 @app.post("/api/mode")
 def update_mode(data: dict):
