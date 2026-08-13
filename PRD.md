@@ -107,6 +107,38 @@ are validated.
 
 ---
 
+## 4b. Channel Connection & Authorization Layer
+
+Each of the 9 channels is described by one declarative spec (`src/core/platforms.py`) that
+drives the dashboard form, the encrypted store, the connection test and the publisher, so
+adding a channel is a single-file change.
+
+| Channel | Auth mechanism | Automated posting |
+|---|---|---|
+| X (Twitter) | OAuth 1.0a user context (HMAC-SHA1 signed) | Yes |
+| LinkedIn | OAuth 2.0 bearer token (`w_member_social`) | Yes |
+| Reddit | OAuth 2.0 password grant (script app) | Yes |
+| Telegram | Bot token | Yes |
+| Discord | Incoming webhook | Yes |
+| WordPress | Application password (HTTP Basic) | Yes |
+| Facebook Page | Graph API page access token | Yes |
+| Instagram Business | Graph API two-step container publish | Yes, requires a public image URL |
+| YouTube Community | OAuth 2.0 / API key | **No public API — manual posting** |
+
+* **Storage**: credentials are Fernet-encrypted per field before serialization into SQLite.
+  Non-secret fields (URLs, usernames, channel ids) remain readable so the form can repopulate.
+* **Disclosure**: `GET /api/platforms` returns an `is_set` flag per field and never a secret
+  value. A blank secret on save preserves the stored one.
+* **Verification**: `POST /api/platforms/{name}/test` calls the channel's own API and records
+  the authenticated account, timestamp and any error. Saving new credentials invalidates a
+  previous verification result.
+* **Gating**: the publisher requires `enabled AND configured AND can_post`. Failures never
+  advance the draft, so a post remains `approved` and retryable.
+* **Honesty constraints**: YouTube Community posting and Instagram-without-a-public-URL both
+  return an explicit failure explaining the platform limitation rather than reporting success.
+
+---
+
 ## 5. Security & Data Protection Standards
 
 * **Credential Storage**: All API keys (OpenAI, Gemini, Anthropic, Stability AI, ComfyUI Org, Tavily, and platform tokens) are encrypted in SQLite using `SecurityManager` (`ENC:v2:` Fernet tokens; legacy `ENC:` records remain readable).

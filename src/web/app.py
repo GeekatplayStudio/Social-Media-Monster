@@ -11,6 +11,8 @@ from src.core.db import engine, init_db, log_event, load_config, DEFAULT_EQUALIZ
 from src.core.models import PostDraft, PersonaProfile, SystemLog, SystemSetting
 from src.core.security import SecurityManager
 from src.core.llm_client import _CIRCUIT
+from src.core.platforms import PlatformCredentialStore, PLATFORM_SPECS
+from src.core.channel_clients import test_channel
 from src.agents.super_agent import SuperAgent
 from src.mcp.server import SocialMediaMonsterMCP
 
@@ -34,6 +36,7 @@ app.mount("/static/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 super_agent = SuperAgent()
 mcp_server = SocialMediaMonsterMCP(super_agent)
 security = SecurityManager()
+platform_store = PlatformCredentialStore()
 
 def is_remote_auth_required() -> bool:
     with Session(engine) as session:
@@ -143,6 +146,74 @@ def save_provider_config(data: dict):
     # Credentials or endpoint may have changed - retry providers that were marked down.
     _CIRCUIT.reset()
     return {"status": "provider_config_saved", "host_mode": data.get("host_mode", "local")}
+
+# ----------------------------------------------------------------- Channel Connections
+
+@app.get("/api/platforms")
+def list_platforms():
+    """
+    Connection status for all 9 channels. Secret values are never included - only a
+    per-field 'is_set' flag so the UI can render a masked placeholder.
+    """
+    return {"platforms": platform_store.describe_all()}
+
+
+@app.get("/api/platforms/{platform}")
+def get_platform(platform: str):
+    try:
+        return platform_store.describe(platform)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown platform '{platform}'")
+
+
+@app.post("/api/platforms/{platform}")
+def save_platform(platform: str, data: dict):
+    """Blank secret fields keep the stored value, so nothing has to be re-typed."""
+    try:
+        return platform_store.save_credentials(platform, data)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown platform '{platform}'")
+
+
+@app.post("/api/platforms/{platform}/test")
+def test_platform(platform: str):
+    """Live credential check against the channel's own API."""
+    try:
+        spec = PLATFORM_SPECS[platform]
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown platform '{platform}'")
+
+    creds = platform_store.get_credentials(platform)
+    result = test_channel(platform, creds)
+    platform_store.record_test_result(platform, result.ok, result.message, result.account)
+    return {
+        "platform": platform,
+        "label": spec["label"],
+        **result.as_dict(),
+        "connection": platform_store.describe(platform),
+    }
+
+
+@app.post("/api/platforms/{platform}/toggle")
+def toggle_platform(platform: str, data: dict):
+    try:
+        return platform_store.set_enabled(platform, bool(data.get("enabled", True)))
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown platform '{platform}'")
+
+
+@app.post("/api/platforms/{platform}/disconnect")
+def disconnect_platform(platform: str):
+    try:
+        return platform_store.disconnect(platform)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Unknown platform '{platform}'")
+
+
+@app.get("/api/platforms-readiness")
+def platforms_readiness():
+    return {"channels": super_agent.publisher_agent.connection_report()}
+
 
 @app.post("/api/stop")
 def stop_all_agents():

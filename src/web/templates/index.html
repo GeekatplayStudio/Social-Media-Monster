@@ -60,8 +60,31 @@
             <!-- Modal Navigation Tabs -->
             <div class="flex items-center space-x-3 border-b border-gray-800 pb-3 text-xs">
                 <button onclick="showConfigTab('provider')" id="tabBtnProvider" class="px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow">Abstract API Provider Layer</button>
+                <button onclick="showConfigTab('channels')" id="tabBtnChannels" class="px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700">
+                    Channel Connections <span id="channelCountBadge" class="ml-1 text-[10px] text-gray-500"></span>
+                </button>
                 <button onclick="showConfigTab('mcp')" id="tabBtnMcp" class="px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700">MCP Protocol Status</button>
                 <button onclick="showConfigTab('help')" id="tabBtnHelp" class="px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700">Technology Architecture Help</button>
+            </div>
+
+            <!-- Tab: Channel Connections (per-platform credentials & authorization) -->
+            <div id="configTabChannels" class="hidden space-y-3 text-xs">
+                <div class="bg-dark-3 border border-gray-800 rounded-xl p-4 flex items-start justify-between gap-4">
+                    <div class="space-y-1">
+                        <h3 class="font-bold text-gray-200">Connect your social accounts</h3>
+                        <p class="text-gray-400 leading-relaxed">
+                            Credentials are encrypted with your master key before being written to SQLite and are
+                            never sent back to this page. Use <span class="text-gray-200 font-semibold">Test</span>
+                            to verify a channel against its live API before publishing.
+                        </p>
+                        <p class="text-gray-500">
+                            Posting only happens in <span class="text-gray-300 font-semibold">PROD</span> mode,
+                            and only for channels that are connected and switched on.
+                        </p>
+                    </div>
+                    <button onclick="loadChannels()" class="shrink-0 px-3 py-2 bg-dark-4 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded-lg font-bold transition" title="Reload connection status">↻ Refresh</button>
+                </div>
+                <div id="channelList" class="space-y-2"></div>
             </div>
 
             <!-- Tab 1: Abstract API Provider Layer -->
@@ -597,25 +620,19 @@
         function openConfigModal() { document.getElementById('configModal').classList.remove('hidden'); }
         function closeConfigModal() { document.getElementById('configModal').classList.add('hidden'); }
 
+        const CONFIG_TABS = ['provider', 'channels', 'mcp', 'help'];
+        const TAB_IDLE = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
+        const TAB_ACTIVE = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
+
         function showConfigTab(tabName) {
-            document.getElementById('configTabProvider').classList.add('hidden');
-            document.getElementById('configTabMcp').classList.add('hidden');
-            document.getElementById('configTabHelp').classList.add('hidden');
-
-            document.getElementById('tabBtnProvider').className = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
-            document.getElementById('tabBtnMcp').className = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
-            document.getElementById('tabBtnHelp').className = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
-
-            if (tabName === 'provider') {
-                document.getElementById('configTabProvider').classList.remove('hidden');
-                document.getElementById('tabBtnProvider').className = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
-            } else if (tabName === 'mcp') {
-                document.getElementById('configTabMcp').classList.remove('hidden');
-                document.getElementById('tabBtnMcp').className = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
-            } else if (tabName === 'help') {
-                document.getElementById('configTabHelp').classList.remove('hidden');
-                document.getElementById('tabBtnHelp').className = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
-            }
+            CONFIG_TABS.forEach(t => {
+                const name = t.charAt(0).toUpperCase() + t.slice(1);
+                const panel = document.getElementById('configTab' + name);
+                const btn = document.getElementById('tabBtn' + name);
+                if (panel) panel.classList.toggle('hidden', t !== tabName);
+                if (btn) btn.className = (t === tabName) ? TAB_ACTIVE : TAB_IDLE;
+            });
+            if (tabName === 'channels') loadChannels();
         }
 
         async function saveProviderConfig() {
@@ -909,17 +926,26 @@
                 return;
             }
             container.innerHTML = filtered.map(p => `
-                <div class="bg-dark-2 border border-gray-custom rounded-2xl p-6 shadow-xl space-y-3">
-                    <div class="flex items-center justify-between bg-dark-1 p-3 rounded-xl border border-gray-800">
-                        <div class="flex items-center space-x-2">
-                            <span class="px-3 py-1 rounded text-xs font-bold uppercase bg-dark-4 text-gray-200">${p.platform}</span>
-                            <button onclick="generateSingleTestArticle(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-emerald-400 border border-emerald-800 transition">Generate Test Article</button>
-                            <button onclick="generateSingleTestImage(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-sky-400 border border-sky-800 transition">Generate 1 Test Image</button>
-                            <button onclick="approvePost(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-amber-300 border border-amber-800 transition">Approve</button>
-                            <button onclick="rejectPost(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-rose-400 border border-rose-900 transition">Reject</button>
-                            <span class="px-2 py-1 rounded text-[10px] font-bold uppercase ${statusClass(p.status)}">${p.status}</span>
+                <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl space-y-3">
+                    <div class="flex items-center justify-between gap-3 bg-dark-1 px-3 py-2 rounded-xl border border-gray-800">
+                        <div class="flex items-center gap-2 min-w-0">
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide bg-dark-4 text-gray-300 border border-gray-700">${p.platform}</span>
+                            <span class="flex items-center gap-1.5 text-[10px] font-semibold uppercase ${statusTextClass(p.status)}" title="Draft status">
+                                <span class="w-1.5 h-1.5 rounded-full ${statusDotClass(p.status)}"></span>${escapeHtml(p.status)}
+                            </span>
                         </div>
-                        <span class="text-xs font-mono text-emerald-400">CTR: ${p.ctr_score}% | AI Score: ${p.ai_detection_score}</span>
+                        <div class="flex items-center gap-2 shrink-0">
+                            <span class="hidden sm:flex items-center gap-2 text-[10px] font-mono text-gray-500" title="Estimated CTR and AI-detection heuristics">
+                                <span>CTR <span class="${p.ctr_score >= 70 ? 'text-emerald-400' : 'text-gray-300'}">${p.ctr_score}%</span></span>
+                                <span class="text-gray-700">|</span>
+                                <span>AI <span class="${p.ai_detection_score <= 0.35 ? 'text-emerald-400' : 'text-amber-400'}">${p.ai_detection_score}</span></span>
+                            </span>
+                            <span class="w-px h-5 bg-gray-800"></span>
+                            <button onclick="generateSingleTestArticle(${p.id})" class="${ICON_BTN} hover:text-emerald-400 hover:border-emerald-800" title="Regenerate this post's text">✎</button>
+                            <button onclick="generateSingleTestImage(${p.id})" class="${ICON_BTN} hover:text-sky-400 hover:border-sky-800" title="Generate image for this post">▣</button>
+                            <button onclick="approvePost(${p.id})" class="${ICON_BTN} hover:text-emerald-400 hover:border-emerald-700" title="Approve for publishing">✓</button>
+                            <button onclick="rejectPost(${p.id})" class="${ICON_BTN} hover:text-rose-400 hover:border-rose-800" title="Reject this draft">✕</button>
+                        </div>
                     </div>
                     <h3 class="text-sm font-bold text-gray-100">${escapeHtml(p.headline)}</h3>
                     <div class="text-xs text-gray-300 whitespace-pre-wrap bg-dark-3 p-3 rounded-xl">${escapeHtml(p.content)}</div>
@@ -984,6 +1010,149 @@
             fetchLogs();
         }
 
+        // ------------------------------------------------ Channel Connections
+        let channelData = [];
+        let openChannel = null;
+
+        async function loadChannels() {
+            const res = await fetch('/api/platforms');
+            const data = await res.json();
+            channelData = data.platforms || [];
+            renderChannels();
+        }
+
+        function channelStatusPill(c) {
+            if (!c.configured) return '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-dark-4 text-gray-500 border border-gray-700">Not connected</span>';
+            if (c.status === 'connected') return '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-950 text-emerald-300 border border-emerald-800">Connected</span>';
+            if (c.status === 'failed') return '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-rose-950 text-rose-300 border border-rose-800">Failed</span>';
+            return '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-amber-950 text-amber-300 border border-amber-800">Untested</span>';
+        }
+
+        function renderChannels() {
+            const connected = channelData.filter(c => c.configured && c.status === 'connected').length;
+            const badge = document.getElementById('channelCountBadge');
+            if (badge) badge.innerText = `${connected}/${channelData.length}`;
+
+            document.getElementById('channelList').innerHTML = channelData.map(c => {
+                const isOpen = openChannel === c.platform;
+                const fields = c.fields.map(f => {
+                    const val = f.secret ? '' : escapeHtml(f.value || '');
+                    const ph = f.secret && f.is_set ? '•••••••• stored (leave blank to keep)' : escapeHtml(f.placeholder || '');
+                    return `
+                        <div>
+                            <label class="block text-gray-400 mb-1">
+                                ${escapeHtml(f.label)}${f.required ? '' : ' <span class="text-gray-600">(optional)</span>'}
+                                ${f.is_set ? '<span class="ml-1 text-emerald-500">●</span>' : ''}
+                            </label>
+                            <input type="${f.secret ? 'password' : 'text'}"
+                                   id="ch_${c.platform}_${f.name}"
+                                   value="${val}" placeholder="${ph}"
+                                   class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-1.5 text-gray-200 font-mono">
+                            ${f.help ? `<p class="text-[10px] text-gray-500 mt-1">${escapeHtml(f.help)}</p>` : ''}
+                        </div>`;
+                }).join('');
+
+                return `
+                <div class="bg-dark-3 border ${isOpen ? 'border-gray-600' : 'border-gray-800'} rounded-xl overflow-hidden">
+                    <div class="flex items-center justify-between px-4 py-2.5 cursor-pointer hover:bg-dark-4 transition" onclick="toggleChannel('${c.platform}')">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <span class="w-7 h-7 shrink-0 rounded-lg bg-dark-1 border border-gray-700 flex items-center justify-center text-gray-300 font-bold">${c.icon}</span>
+                            <div class="min-w-0">
+                                <div class="font-bold text-gray-200 truncate">${escapeHtml(c.label)}</div>
+                                <div class="text-[10px] text-gray-500 truncate">${c.account ? escapeHtml(c.account) + ' · ' : ''}${escapeHtml(c.auth)}</div>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2 shrink-0">
+                            ${c.can_post ? '' : '<span class="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-dark-4 text-gray-500 border border-gray-700" title="No public posting API">Manual only</span>'}
+                            ${channelStatusPill(c)}
+                            <button onclick="event.stopPropagation(); toggleChannelEnabled('${c.platform}', ${!c.enabled})"
+                                    class="w-9 h-5 rounded-full relative transition shrink-0 ${
+                                        !c.enabled ? 'bg-gray-700'
+                                        : c.configured ? 'bg-emerald-600' : 'bg-gray-600'}"
+                                    title="${!c.enabled ? 'Channel off - click to enable'
+                                        : c.configured ? 'Channel on and connected - click to disable'
+                                        : 'Channel on, but no credentials yet - click to disable'}">
+                                <span class="absolute top-0.5 w-4 h-4 rounded-full transition-all ${c.enabled && c.configured ? 'bg-white' : 'bg-gray-300'}" style="left:${c.enabled ? '18px' : '2px'}"></span>
+                            </button>
+                            <span class="text-gray-500 font-mono">${isOpen ? '▾' : '▸'}</span>
+                        </div>
+                    </div>
+
+                    ${isOpen ? `
+                    <div class="px-4 pb-4 pt-1 space-y-3 border-t border-gray-800">
+                        <p class="text-[11px] text-gray-400 leading-relaxed bg-dark-1 border border-gray-800 rounded-lg p-3">
+                            ${escapeHtml(c.setup)}
+                            <a href="${escapeHtml(c.portal)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline block mt-1">Open developer portal →</a>
+                        </p>
+                        ${c.last_error ? `<p class="text-[11px] text-rose-300 bg-rose-950/40 border border-rose-900 rounded-lg p-2">${escapeHtml(c.last_error)}</p>` : ''}
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">${fields}</div>
+                        <div class="flex items-center gap-2 pt-1">
+                            <button onclick="saveChannel('${c.platform}')" class="px-4 py-1.5 bg-gray-200 hover:bg-white text-gray-900 font-bold rounded-lg transition">Save</button>
+                            <button onclick="testChannel('${c.platform}')" class="px-4 py-1.5 bg-dark-4 hover:bg-gray-700 text-gray-200 border border-gray-600 font-bold rounded-lg transition">Test Connection</button>
+                            <button onclick="disconnectChannel('${c.platform}')" class="px-4 py-1.5 bg-dark-1 hover:bg-rose-950 text-rose-400 border border-rose-900 font-bold rounded-lg transition ml-auto">Disconnect</button>
+                        </div>
+                        <p id="chResult_${c.platform}" class="text-[11px] text-gray-400"></p>
+                        ${c.last_checked ? `<p class="text-[10px] text-gray-600">Last checked ${new Date(c.last_checked).toLocaleString()}</p>` : ''}
+                    </div>` : ''}
+                </div>`;
+            }).join('');
+        }
+
+        function toggleChannel(platform) {
+            openChannel = openChannel === platform ? null : platform;
+            renderChannels();
+        }
+
+        async function toggleChannelEnabled(platform, enabled) {
+            await fetch(`/api/platforms/${platform}/toggle`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ enabled: enabled })
+            });
+            await loadChannels();
+        }
+
+        async function saveChannel(platform) {
+            const c = channelData.find(x => x.platform === platform);
+            const payload = {};
+            c.fields.forEach(f => {
+                const el = document.getElementById(`ch_${platform}_${f.name}`);
+                if (el) payload[f.name] = el.value;
+            });
+            const res = await fetch(`/api/platforms/${platform}`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            const updated = await res.json();
+            const note = document.getElementById(`chResult_${platform}`);
+            if (note) {
+                note.className = 'text-[11px] text-emerald-400';
+                note.innerText = updated.configured
+                    ? 'Saved and encrypted. Run Test Connection to verify.'
+                    : 'Saved, but some required fields are still empty.';
+            }
+            await loadChannels();
+        }
+
+        async function testChannel(platform) {
+            const note = document.getElementById(`chResult_${platform}`);
+            if (note) { note.className = 'text-[11px] text-gray-400'; note.innerText = 'Testing…'; }
+            const res = await fetch(`/api/platforms/${platform}/test`, { method: 'POST' });
+            const data = await res.json();
+            if (note) {
+                note.className = data.ok ? 'text-[11px] text-emerald-400' : 'text-[11px] text-rose-300';
+                note.innerText = data.message;
+            }
+            await loadChannels();
+            fetchLogs();
+        }
+
+        async function disconnectChannel(platform) {
+            const c = channelData.find(x => x.platform === platform);
+            if (!confirm(`Remove all stored credentials for ${c.label}? This cannot be undone.`)) return;
+            await fetch(`/api/platforms/${platform}/disconnect`, { method: 'POST' });
+            await loadChannels();
+        }
+
         function escapeHtml(value) {
             if (value === null || value === undefined) return '';
             return String(value)
@@ -991,13 +1160,30 @@
                 .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
         }
 
-        function statusClass(status) {
+        // Uniform square icon button so every action in the card toolbar is the same size.
+        const ICON_BTN = 'w-7 h-7 shrink-0 flex items-center justify-center rounded-lg bg-dark-3 ' +
+                         'border border-gray-700 text-gray-400 text-xs leading-none transition ' +
+                         'hover:bg-dark-4';
+
+        function statusTextClass(status) {
             switch ((status || '').toLowerCase()) {
-                case 'approved': return 'bg-emerald-900 text-emerald-300 border border-emerald-700';
-                case 'published': return 'bg-sky-900 text-sky-300 border border-sky-700';
-                case 'rejected': return 'bg-rose-950 text-rose-300 border border-rose-800';
-                case 'needs_review': return 'bg-amber-950 text-amber-300 border border-amber-800';
-                default: return 'bg-dark-4 text-gray-400 border border-gray-700';
+                case 'approved': return 'text-emerald-400';
+                case 'published': return 'text-sky-400';
+                case 'rejected': return 'text-rose-400';
+                case 'needs_review': return 'text-amber-400';
+                case 'humanized': return 'text-gray-300';
+                default: return 'text-gray-500';
+            }
+        }
+
+        function statusDotClass(status) {
+            switch ((status || '').toLowerCase()) {
+                case 'approved': return 'bg-emerald-400';
+                case 'published': return 'bg-sky-400';
+                case 'rejected': return 'bg-rose-400';
+                case 'needs_review': return 'bg-amber-400';
+                case 'humanized': return 'bg-gray-400';
+                default: return 'bg-gray-600';
             }
         }
 
