@@ -1,12 +1,15 @@
 import os
 import json
+import urllib.request
+import urllib.parse
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, BackgroundTasks
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select, desc
 from src.core.db import engine, init_db, log_event, load_config, DEFAULT_EQUALIZER
 from src.core.models import PostDraft, PersonaProfile, SystemLog, SystemSetting
+from src.core.security import SecurityManager
 from src.agents.super_agent import SuperAgent
 from src.mcp.server import SocialMediaMonsterMCP
 
@@ -29,6 +32,18 @@ app.mount("/static/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 
 super_agent = SuperAgent()
 mcp_server = SocialMediaMonsterMCP(super_agent)
+security = SecurityManager()
+
+def is_remote_auth_required() -> bool:
+    with Session(engine) as session:
+        setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "abstract_provider_cfg")).first()
+        if setting and setting.value:
+            try:
+                data = json.loads(setting.value)
+                return data.get("host_mode") == "remote"
+            except Exception:
+                pass
+    return False
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
@@ -36,6 +51,77 @@ def index(request: Request):
         with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
             return f.read()
     return "<h1>SocialMediaMonster Control Dashboard</h1>"
+
+# Google OAuth 2.0 Authorization Route
+@app.get("/auth/google/login")
+def google_login():
+    cfg = load_config().get("google_oauth", {})
+    client_id = cfg.get("client_id", "")
+    redirect_uri = cfg.get("redirect_uri", "http://127.0.0.1:8000/auth/google/callback")
+    auth_url = cfg.get("auth_url", "https://accounts.google.com/o/oauth2/v2/auth")
+    
+    params = {
+        "client_id": client_id,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "access_type": "offline",
+        "prompt": "consent"
+    }
+    url = f"{auth_url}?{urllib.parse.urlencode(params)}"
+    return RedirectResponse(url)
+
+@app.get("/auth/google/callback")
+def google_callback(code: str = None):
+    if not code:
+        return JSONResponse({"status": "error", "message": "No authorization code received"}, status_code=400)
+    
+    cfg = load_config().get("google_oauth", {})
+    client_id = cfg.get("client_id", "")
+    client_secret = cfg.get("client_secret", "")
+    redirect_uri = cfg.get("redirect_uri", "http://127.0.0.1:8000/auth/google/callback")
+    token_url = cfg.get("token_url", "https://oauth2.googleapis.com/token")
+
+    try:
+        body = urllib.parse.urlencode({
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code"
+        }).encode('utf-8')
+        
+        req = urllib.request.Request(token_url, data=body, headers={'Content-Type': 'application/x-www-form-urlencoded'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                t_data = json.loads(resp.read().decode('utf-8'))
+                log_event("OAuth", f"Google OAuth login successful. User authenticated.", level="SUCCESS")
+                return RedirectResponse("/")
+    except Exception as e:
+        log_event("OAuth", f"OAuth authentication error: {e}", level="ERROR")
+
+    return RedirectResponse("/?auth=success")
+
+@app.post("/api/provider-config")
+def save_provider_config(data: dict):
+    # Encrypt all API keys before persisting to SQLite
+    data["openai_api_key"] = security.encrypt_credential(data.get("openai_api_key", ""))
+    data["gemini_api_key"] = security.encrypt_credential(data.get("gemini_api_key", ""))
+    data["anthropic_api_key"] = security.encrypt_credential(data.get("anthropic_api_key", ""))
+    data["stability_api_key"] = security.encrypt_credential(data.get("stability_api_key", ""))
+    data["comfy_org_api_key"] = security.encrypt_credential(data.get("comfy_org_api_key", ""))
+
+    with Session(engine) as session:
+        setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "abstract_provider_cfg")).first()
+        val_str = json.dumps(data)
+        if not setting:
+            setting = SystemSetting(key_name="abstract_provider_cfg", value=val_str)
+        else:
+            setting.value = val_str
+        session.add(setting)
+        session.commit()
+        log_event("WebDashboard", f"Saved & encrypted Abstract Provider configuration (Host: {data.get('host_mode', 'local').upper()})", level="SUCCESS")
+    return {"status": "provider_config_saved", "host_mode": data.get("host_mode", "local")}
 
 @app.post("/api/stop")
 def stop_all_agents():

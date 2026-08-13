@@ -613,9 +613,16 @@
                 openai_api_key: document.getElementById('cfgOpenAIKey').value,
                 gemini_api_key: document.getElementById('cfgGeminiKey').value,
                 anthropic_api_key: document.getElementById('cfgAnthropicKey').value,
+                stability_api_key: document.getElementById('cfgStabilityKey').value,
+                comfy_org_api_key: document.getElementById('cfgComfyOrgKey').value,
                 base_url: document.getElementById('cfgBaseUrl').value
             };
-            alert(`Provider Settings Saved! Host: ${payload.host_mode.toUpperCase()} | Provider: ${payload.provider.toUpperCase()}`);
+            await fetch('/api/provider-config', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            alert(`Encrypted Provider Settings Saved! Host: ${payload.host_mode.toUpperCase()} | Provider: ${payload.provider.toUpperCase()}`);
             closeConfigModal();
         }
 

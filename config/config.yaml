@@ -4,6 +4,15 @@ system:
   auto_publish: false          # Requires manual UI approval before posting if false
   max_posts_per_cycle: 3
 
+google_oauth:
+  enabled_remote_only: true       # Bypassed on local desktop, enforced on remote/production
+  client_id: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+  client_secret: "YOUR_GOOGLE_CLIENT_SECRET"
+  redirect_uri: "http://127.0.0.1:8000/auth/google/callback"
+  auth_url: "https://accounts.google.com/o/oauth2/v2/auth"
+  token_url: "https://oauth2.googleapis.com/token"
+  userinfo_url: "https://www.googleapis.com/oauth2/v2/userinfo"
+
 database:
   sqlite_path: "data/social_monster.db"
   chroma_path: "data/vector_db"
