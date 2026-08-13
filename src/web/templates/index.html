@@ -1,0 +1,930 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SocialMediaMonster // Autonomous AI Engine & MCP Server</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #121212; color: #e0e0e0; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        .bg-dark-1 { background-color: #121212; }
+        .bg-dark-2 { background-color: #1a1a1a; }
+        .bg-dark-3 { background-color: #242424; }
+        .bg-dark-4 { background-color: #2e2e2e; }
+        .border-gray-custom { border-color: #383838; }
+        input[type=range] { accent-color: #38bdf8; }
+        .pixelated { image-rendering: pixelated; }
+    </style>
+</head>
+<body class="min-h-screen pb-16 bg-dark-1">
+    
+    <!-- Top Navigation Header -->
+    <header class="bg-dark-2 border-b border-gray-custom sticky top-0 z-50 px-8 py-4 flex flex-wrap items-center justify-between shadow-lg">
+        <div class="flex items-center space-x-4">
+            <img src="/static/avatars/smm_monster_logo.jpg" class="w-10 h-10 rounded-xl border border-purple-500/50 pixelated shadow object-cover">
+            <div>
+                <h1 class="text-lg font-bold text-gray-100 tracking-wide">SocialMediaMonster</h1>
+                <p class="text-xs text-gray-400">Autonomous Multi-Platform Content Engine & MCP Protocol Server</p>
+            </div>
+        </div>
+
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center bg-dark-3 border border-gray-custom rounded-xl p-1.5 space-x-2">
+                <span class="text-xs font-semibold px-2 text-gray-400">MODE:</span>
+                <button id="modeDemoBtn" onclick="setMode('demo')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition bg-gray-200 text-gray-900 shadow">DEMO</button>
+                <button id="modeProdBtn" onclick="setMode('production')" class="px-3 py-1.5 rounded-lg text-xs font-bold transition text-gray-400 hover:text-white">PROD</button>
+            </div>
+            <button onclick="triggerScanOnly()" class="px-4 py-2 bg-dark-4 hover:bg-gray-700 text-gray-200 border border-gray-600 text-xs font-bold rounded-xl shadow transition">Scan Internet</button>
+            <button onclick="triggerPipeline()" class="px-5 py-2 bg-gray-200 hover:bg-white text-gray-900 font-bold text-xs rounded-xl shadow transition">Run Pipeline</button>
+            <button onclick="stopAllAgents()" class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-bold text-xs rounded-xl shadow-lg border border-red-400 transition-all">STOP ALL AGENTS</button>
+            
+            <!-- Gear Icon for Configuration Overlay Modal -->
+            <button onclick="openConfigModal()" class="w-9 h-9 rounded-xl bg-dark-3 hover:bg-dark-4 text-gray-300 hover:text-white border border-gray-700 flex items-center justify-center font-bold text-sm shadow transition" title="System Settings & Provider Configuration">⚙</button>
+        </div>
+    </header>
+
+    <!-- Configuration & Help Overlay Modal -->
+    <div id="configModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 hidden flex items-center justify-center p-6">
+        <div class="bg-dark-2 border border-gray-custom rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl p-6 space-y-6">
+            
+            <div class="flex items-center justify-between border-b border-gray-800 pb-4">
+                <div>
+                    <h2 class="text-base font-bold text-gray-100 uppercase tracking-wider">System Settings & Architecture Configuration</h2>
+                    <p class="text-xs text-gray-400">Abstract Provider Layer, MCP Protocol Verification, and Temporal State Restoration Settings</p>
+                </div>
+                <button onclick="closeConfigModal()" class="text-gray-400 hover:text-white font-mono text-sm px-3 py-1 bg-dark-3 rounded-lg border border-gray-700">✕ Close</button>
+            </div>
+
+            <!-- Modal Navigation Tabs -->
+            <div class="flex items-center space-x-3 border-b border-gray-800 pb-3 text-xs">
+                <button onclick="showConfigTab('provider')" id="tabBtnProvider" class="px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow">Abstract API Provider Layer</button>
+                <button onclick="showConfigTab('mcp')" id="tabBtnMcp" class="px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700">MCP Protocol Status</button>
+                <button onclick="showConfigTab('help')" id="tabBtnHelp" class="px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700">Technology Architecture Help</button>
+            </div>
+
+            <!-- Tab 1: Abstract API Provider Layer -->
+            <div id="configTabProvider" class="space-y-4 text-xs">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-300 font-bold mb-1">Execution Host Mode</label>
+                        <select id="cfgHostMode" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-3 py-2 text-gray-200 font-mono">
+                            <option value="local">Local Desktop Environment</option>
+                            <option value="remote">Remote Cloud API Infrastructure</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="block text-gray-300 font-bold mb-1">Abstract LLM & Visual Provider</label>
+                        <select id="cfgProvider" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-3 py-2 text-gray-200 font-mono">
+                            <option value="ollama">Local Ollama (Llama 3.3 / Qwen 2.5 / Mistral)</option>
+                            <option value="openai">OpenAI API (GPT-4o / DALL-E 3)</option>
+                            <option value="gemini">Google Gemini API (1.5 Pro / 2.0 Flash)</option>
+                            <option value="anthropic">Anthropic Claude API (3.5 Sonnet)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="space-y-3 bg-dark-3 p-4 rounded-xl border border-gray-800">
+                    <h3 class="font-bold text-gray-200">API Credentials & Endpoints</h3>
+                    <div>
+                        <label class="block text-gray-400 mb-1">OpenAI API Key</label>
+                        <input type="password" id="cfgOpenAIKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="sk-...">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">Google Gemini API Key</label>
+                        <input type="password" id="cfgGeminiKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="AIzaSy...">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">Anthropic Claude API Key</label>
+                        <input type="password" id="cfgAnthropicKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="sk-ant-...">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">Stability AI API Key</label>
+                        <input type="password" id="cfgStabilityKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="sk-...">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">ComfyUI Org API Key</label>
+                        <input type="password" id="cfgComfyOrgKey" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" placeholder="comfy_...">
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">Local / Custom Endpoint Base URL</label>
+                        <input type="text" id="cfgBaseUrl" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono" value="http://127.0.0.1:11434">
+                    </div>
+                </div>
+
+                <button onclick="saveProviderConfig()" class="px-5 py-2.5 bg-gray-200 hover:bg-white text-gray-900 font-bold rounded-xl shadow transition">Save Provider Configuration</button>
+            </div>
+
+            <!-- Tab 2: MCP Protocol Verification -->
+            <div id="configTabMcp" class="hidden space-y-4 text-xs">
+                <div class="bg-dark-3 p-4 rounded-xl border border-gray-800 space-y-3">
+                    <div class="flex items-center justify-between">
+                        <span class="font-bold text-gray-200">MCP Protocol Server Status</span>
+                        <span class="text-xs font-mono text-emerald-400 bg-dark-4 border border-gray-700 px-3 py-1 rounded">VERIFIED & ACTIVE</span>
+                    </div>
+                    <p class="text-gray-400">Endpoint Manifest: <code class="text-sky-400 font-mono">GET /api/mcp/manifest</code></p>
+                </div>
+
+                <div class="space-y-2">
+                    <h3 class="font-bold text-gray-200">Exposed MCP Agent Tools</h3>
+                    <div class="space-y-2 font-mono text-[11px]">
+                        <div class="bg-dark-3 p-3 rounded-lg border border-gray-800 flex justify-between">
+                            <span class="text-sky-400 font-bold">get_system_status</span>
+                            <span class="text-gray-400">Inspect system mode, active persona, and anti-spam schedule</span>
+                        </div>
+                        <div class="bg-dark-3 p-3 rounded-lg border border-gray-800 flex justify-between">
+                            <span class="text-sky-400 font-bold">trigger_scan</span>
+                            <span class="text-gray-400">Trigger Web Research Agent internet scan</span>
+                        </div>
+                        <div class="bg-dark-3 p-3 rounded-lg border border-gray-800 flex justify-between">
+                            <span class="text-sky-400 font-bold">trigger_full_cycle</span>
+                            <span class="text-gray-400">Execute complete Super Agent pipeline cycle</span>
+                        </div>
+                        <div class="bg-dark-3 p-3 rounded-lg border border-gray-800 flex justify-between">
+                            <span class="text-sky-400 font-bold">list_posts</span>
+                            <span class="text-gray-400">Fetch drafted multi-platform social media posts</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 3: Technology Architecture Help -->
+            <div id="configTabHelp" class="hidden space-y-4 text-xs text-gray-300">
+                <div class="bg-dark-3 p-4 rounded-xl border border-gray-800 space-y-3">
+                    <h3 class="font-bold text-gray-100 uppercase tracking-wider">SocialMediaMonster System Architecture</h3>
+                    <ul class="space-y-2 font-mono text-[11px] text-gray-400">
+                        <li>• <strong class="text-gray-200">Core Logic & Orchestration:</strong> Python 3.12, FastAPI, SQLModel, SQLite persistent database.</li>
+                        <li>• <strong class="text-gray-200">Abstract API Provider Layer:</strong> Unified abstract interface routing to Local Ollama, OpenAI, Google Gemini, and Anthropic Claude.</li>
+                        <li>• <strong class="text-gray-200">ComfyUI Idiogram Engine:</strong> High-contrast editorial visual card generator with bounding box coordinates and prompt dispatch.</li>
+                        <li>• <strong class="text-gray-200">MCP Protocol Server:</strong> Standardized AI Model Context Protocol exposing agent tools for system control.</li>
+                        <li>• <strong class="text-gray-200">Temporal Persistent State Recovery:</strong> SQLite checkpointing engine recording worker execution stages (RESEARCH, VERIFICATION, COPYWRITING, QA_VALIDATION, VISUAL_GENERATION, PUBLISHING). If server restarts or page closes, state is automatically restored.</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Active Image Generation Engine Selector Bar -->
+    <section class="max-w-7xl mx-auto px-6 pt-6">
+        <div class="bg-dark-2 border border-gray-custom rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+            <div class="flex items-center space-x-2">
+                <span class="text-xs text-gray-200 font-bold uppercase tracking-wider">Active Image Generation Engine</span>
+                <span id="activeImgEngineBadge" class="text-[10px] font-mono text-sky-400 bg-dark-4 border border-gray-700 px-2 py-0.5 rounded uppercase">LOCAL COMFYUI</span>
+            </div>
+            <div class="flex flex-wrap items-center gap-1.5 text-xs">
+                <button id="imgEngineBtn_comfyui_local" onclick="setImageProvider('comfyui_local')" class="px-3 py-1.5 rounded-xl font-bold bg-gray-200 text-gray-900 border-2 border-white shadow transition-all scale-105">Local ComfyUI</button>
+                <button id="imgEngineBtn_stability_ai" onclick="setImageProvider('stability_ai')" class="px-3 py-1.5 rounded-xl font-semibold bg-dark-3 text-gray-400 border border-gray-700 hover:text-white transition">Stability AI API</button>
+                <button id="imgEngineBtn_comfy_org" onclick="setImageProvider('comfy_org')" class="px-3 py-1.5 rounded-xl font-semibold bg-dark-3 text-gray-400 border border-gray-700 hover:text-white transition">ComfyUI Org API</button>
+                <button id="imgEngineBtn_ideogram_card" onclick="setImageProvider('ideogram_card')" class="px-3 py-1.5 rounded-xl font-semibold bg-dark-3 text-gray-400 border border-gray-700 hover:text-white transition">Ideogram Template</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Persistent Target Subjects & Anti-Spam Controls -->
+    <section class="max-w-7xl mx-auto px-6 pt-6 grid grid-cols-1 md:grid-cols-12 gap-6">
+        <div class="md:col-span-7 bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold text-gray-200 uppercase tracking-wider">Research Target Subjects & Keywords</span>
+                <button onclick="saveTopics()" class="px-3.5 py-1.5 bg-gray-200 hover:bg-white text-gray-900 font-bold text-xs rounded-xl shadow transition">Save Subjects</button>
+            </div>
+            <input type="text" id="targetTopicsInput" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-4 py-2 text-xs text-gray-200 font-mono focus:outline-none" placeholder="e.g. Generative AI, Local LLMs, ComfyUI, Flux, Autonomous AI Agents">
+        </div>
+
+        <div class="md:col-span-5 bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-2">
+                <span class="text-xs font-bold text-gray-200 uppercase tracking-wider">Anti-Spam & Image Settings</span>
+                <button onclick="saveSchedule()" class="px-3.5 py-1.5 bg-gray-200 hover:bg-white text-gray-900 font-bold text-xs rounded-xl shadow transition">Save Settings</button>
+            </div>
+            <div class="grid grid-cols-3 gap-2 text-xs">
+                <div>
+                    <label class="block text-gray-400 mb-1">Frequency</label>
+                    <select id="schedIntervalSelect" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-2 py-1.5 text-gray-200 font-mono">
+                        <option value="1">1 Hour</option>
+                        <option value="3">3 Hours</option>
+                        <option value="6" selected>6 Hours</option>
+                        <option value="12">12 Hours</option>
+                        <option value="24">24 Hours</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-gray-400 mb-1">Max Posts</label>
+                    <select id="schedMaxPostsSelect" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-2 py-1.5 text-gray-200 font-mono">
+                        <option value="1">1 Post</option>
+                        <option value="2" selected>2 Posts</option>
+                        <option value="3">3 Posts</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-gray-400 mb-1">Bulk Images</label>
+                    <select id="autoImagesSelect" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-2 py-1.5 text-gray-200 font-mono">
+                        <option value="false" selected>PAUSED (Test 1)</option>
+                        <option value="true">AUTO (All)</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Professional 15-Band Fine-Tuning Equalizer & Dynamic Pixel Art Writer Persona -->
+    <section class="max-w-7xl mx-auto px-6 pt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        
+        <!-- 15-Slider Visual Graphic Equalizer -->
+        <div class="lg:col-span-8 bg-dark-2 border border-gray-custom rounded-2xl p-6 shadow-xl space-y-4">
+            <div class="flex items-center justify-between border-b border-gray-800 pb-3">
+                <div>
+                    <h2 class="text-xs font-bold text-gray-100 uppercase tracking-wider flex items-center space-x-2">
+                        <span>AI Writer Style Graphic Equalizer</span>
+                        <span class="text-[10px] font-mono bg-sky-950 text-sky-400 border border-sky-800 px-2 py-0.5 rounded">15 Bands [-1.0 to +1.0]</span>
+                    </h2>
+                    <p class="text-xs text-gray-400">Precision style mixing board across tone, humor, sarcasm, depth, and storytelling parameters.</p>
+                </div>
+                <button onclick="saveEqualizer()" class="px-4 py-2 bg-sky-500 hover:bg-sky-400 text-gray-900 font-bold text-xs rounded-xl shadow transition">Save Equalizer Profile</button>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-x-6 gap-y-3 text-xs">
+                <!-- Band Column 1 -->
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Seriousness / Humor</span>
+                            <span id="val_seriousness" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_seriousness" min="-1" max="1" step="0.1" value="0.2" oninput="updateEqVal('seriousness')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Funny/Humorous</span><span>Academic/Serious</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Formality</span>
+                            <span id="val_formality" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_formality" min="-1" max="1" step="0.1" value="-0.2" oninput="updateEqVal('formality')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Casual Slang</span><span>Corporate Formal</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Cynicism & Sarcasm</span>
+                            <span id="val_cynicism" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_cynicism" min="-1" max="1" step="0.1" value="0.4" oninput="updateEqVal('cynicism')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Optimistic Hype</span><span>Sarcastic Skeptic</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Technical Depth</span>
+                            <span id="val_technical_depth" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_technical_depth" min="-1" max="1" step="0.1" value="0.6" oninput="updateEqVal('technical_depth')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>ELI5 Simple</span><span>PhD Code-Heavy</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Controversy Stance</span>
+                            <span id="val_political_stance" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_political_stance" min="-1" max="1" step="0.1" value="0.0" oninput="updateEqVal('political_stance')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Neutral Safe</span><span>Provocative Hot-Take</span></div>
+                    </div>
+                </div>
+
+                <!-- Band Column 2 -->
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Pacing & Length</span>
+                            <span id="val_pacing_length" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_pacing_length" min="-1" max="1" step="0.1" value="-0.3" oninput="updateEqVal('pacing_length')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Punchy One-Liners</span><span>Long Deep Essay</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Emotional Warmth</span>
+                            <span id="val_emotional_warmth" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_emotional_warmth" min="-1" max="1" step="0.1" value="0.1" oninput="updateEqVal('emotional_warmth')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Cold Machine</span><span>Warm Empathetic</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Storytelling & Drama</span>
+                            <span id="val_storytelling_drama" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_storytelling_drama" min="-1" max="1" step="0.1" value="0.5" oninput="updateEqVal('storytelling_drama')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Direct Facts</span><span>Dramatic Narrative</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Authority & Boldness</span>
+                            <span id="val_authority_boldness" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_authority_boldness" min="-1" max="1" step="0.1" value="0.7" oninput="updateEqVal('authority_boldness')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Humble Inquiring</span><span>Bold Unapologetic</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Metaphor Density</span>
+                            <span id="val_metaphor_density" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_metaphor_density" min="-1" max="1" step="0.1" value="0.4" oninput="updateEqVal('metaphor_density')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Literal Facts</span><span>Rich Metaphors</span></div>
+                    </div>
+                </div>
+
+                <!-- Band Column 3 -->
+                <div class="space-y-3">
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Clickbait / CTR Energy</span>
+                            <span id="val_clickbait_energy" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_clickbait_energy" min="-1" max="1" step="0.1" value="0.6" oninput="updateEqVal('clickbait_energy')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Modest Understated</span><span>Viral High-CTR Hook</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Tech Jargon</span>
+                            <span id="val_tech_jargon" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_tech_jargon" min="-1" max="1" step="0.1" value="0.3" oninput="updateEqVal('tech_jargon')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Plain English</span><span>Heavy Tech Jargon</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Action CTA</span>
+                            <span id="val_action_cta" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_action_cta" min="-1" max="1" step="0.1" value="0.5" oninput="updateEqVal('action_cta')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Passive Reading</span><span>Direct Call-to-Action</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Humor Type</span>
+                            <span id="val_humor_type" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_humor_type" min="-1" max="1" step="0.1" value="0.2" oninput="updateEqVal('humor_type')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Dry / Dark Humor</span><span>Witty Playful</span></div>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between font-semibold text-gray-300 mb-1">
+                            <span>Provocativeness</span>
+                            <span id="val_provocativeness" class="font-mono text-sky-400">0.0</span>
+                        </div>
+                        <input type="range" id="eq_provocativeness" min="-1" max="1" step="0.1" value="0.4" oninput="updateEqVal('provocativeness')" class="w-full">
+                        <div class="flex justify-between text-[10px] text-gray-500"><span>Consensus Friendly</span><span>Contrarian Disruptive</span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Side: Pixel Art Active Writer Avatar Display & Voice Cloning Box -->
+        <div class="lg:col-span-4 space-y-4">
+            
+            <!-- Dynamic Pixel Art Writer Persona Display -->
+            <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl space-y-3">
+                <div class="flex items-center justify-between border-b border-gray-800 pb-2">
+                    <span class="text-xs font-bold text-gray-200 uppercase tracking-wider">Active Writer Persona</span>
+                    <span id="writerMatchBadge" class="text-[10px] font-mono text-emerald-400 bg-dark-4 border border-gray-700 px-2 py-0.5 rounded">98% Style Match</span>
+                </div>
+                
+                <div class="flex items-center space-x-4">
+                    <img id="writerAvatarImg" src="/static/avatars/avatar_marcus.png" class="w-16 h-16 rounded-xl border border-gray-700 pixelated bg-dark-3 p-1 shadow">
+                    <div>
+                        <h3 id="writerName" class="text-sm font-bold text-gray-100">Dr. Marcus Vance</h3>
+                        <p id="writerTitle" class="text-xs text-sky-400 font-mono">Academic Research Specialist</p>
+                        <p id="writerArchetypeDesc" class="text-[11px] text-gray-400 mt-0.5">Authoritative, technical depth, formal academic tone.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Voice Cloning: Personal Writing Sample Text Area -->
+            <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl flex flex-col justify-between space-y-3">
+                <div>
+                    <h2 class="text-xs font-bold text-gray-100 uppercase tracking-wider mb-1 flex items-center justify-between">
+                        <span>Author Voice Cloning</span>
+                        <span class="text-[10px] font-mono text-emerald-400 bg-dark-4 px-2 py-0.5 rounded">Style Match</span>
+                    </h2>
+                    <p class="text-xs text-gray-400 mb-2">Paste a sample article written by you. AI will clone your exact writing style.</p>
+                    <textarea id="sampleArticleInput" rows="5" class="w-full bg-dark-3 border border-gray-700 rounded-xl p-3 text-xs text-gray-200 font-mono focus:outline-none" placeholder="Paste your article or writing sample here..."></textarea>
+                </div>
+                <button onclick="saveSampleArticle()" class="w-full py-2 bg-gray-200 hover:bg-white text-gray-900 font-bold text-xs rounded-xl shadow transition">Save Writing Voice Sample</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- Super Agent Workflow Status & Live Log Stream -->
+    <section class="max-w-7xl mx-auto px-6 pt-6 space-y-4">
+        <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl">
+            <div class="flex items-center justify-between mb-3">
+                <span class="text-xs font-bold text-gray-300 uppercase tracking-wider">Super Agent Live Workflow Pipeline</span>
+                <span id="pipelineStatusBadge" class="text-xs font-mono px-2.5 py-1 rounded bg-gray-800 text-gray-300 border border-gray-700">STATUS: IDLE</span>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-6 gap-3 text-center mb-4">
+                <div id="node-RESEARCH" class="bg-dark-3 border border-gray-custom p-3 rounded-xl"><div class="text-xs font-bold text-gray-200">Research</div></div>
+                <div id="node-VERIFICATION" class="bg-dark-3 border border-gray-custom p-3 rounded-xl"><div class="text-xs font-bold text-gray-200">Verifier</div></div>
+                <div id="node-COPYWRITING" class="bg-dark-3 border border-gray-custom p-3 rounded-xl"><div class="text-xs font-bold text-gray-200">Writer</div></div>
+                <div id="node-QA_VALIDATION" class="bg-dark-3 border border-gray-custom p-3 rounded-xl"><div class="text-xs font-bold text-gray-200">Validator QA</div></div>
+                <div id="node-VISUAL_GENERATION" class="bg-dark-3 border border-gray-custom p-3 rounded-xl"><div class="text-xs font-bold text-gray-200">Visual ComfyUI</div></div>
+                <div id="node-PUBLISHING" class="bg-dark-3 border border-gray-custom p-3 rounded-xl"><div class="text-xs font-bold text-gray-200">Publisher</div></div>
+            </div>
+
+            <div class="border-t border-gray-800 pt-3">
+                <div class="flex items-center justify-between mb-2">
+                    <div class="flex items-center space-x-2 text-xs font-bold text-gray-300">
+                        <span>System Log Console & Live Stream</span>
+                        <span class="text-[10px] font-mono text-emerald-400 bg-dark-4 px-2 py-0.5 rounded">MCP Protocol</span>
+                    </div>
+                    <button id="expandLogBtn" onclick="toggleLogHeight()" class="px-3 py-1 bg-dark-3 hover:bg-dark-4 text-xs font-mono text-gray-300 rounded border border-gray-700">Expand Log View (500px)</button>
+                </div>
+                <div id="logsContainer" class="bg-dark-1 rounded-xl p-3 h-48 transition-all duration-300 overflow-y-auto font-mono text-[11px] space-y-1.5 text-gray-300 border border-gray-800">
+                    <div class="text-gray-500">System initializing...</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- Main Content & Multi-Platform Post Feed -->
+    <main class="max-w-7xl mx-auto px-6 pt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <section class="lg:col-span-5 space-y-6">
+            <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl">
+                <h2 class="text-xs font-bold text-gray-200 uppercase tracking-wider mb-3 flex items-center justify-between">
+                    <span>Granular Scan Telemetry</span>
+                    <span class="text-[10px] font-mono text-emerald-400 bg-dark-4 px-2 py-0.5 rounded">Real-Time</span>
+                </h2>
+                <div class="space-y-3 text-xs">
+                    <div class="bg-dark-3 p-3 rounded-xl border border-gray-700">
+                        <span class="text-gray-400 font-semibold block mb-1">Active Queries:</span>
+                        <div id="telemetryQueries" class="font-mono text-gray-200 flex flex-wrap gap-1"></div>
+                    </div>
+                    <div class="bg-dark-3 p-3 rounded-xl border border-gray-700 max-h-32 overflow-y-auto">
+                        <span class="text-gray-400 font-semibold block mb-1">Scanned Websites:</span>
+                        <div id="telemetrySources" class="font-mono text-[11px] text-gray-400 space-y-1"></div>
+                    </div>
+                    <div class="bg-dark-3 p-3 rounded-xl border border-gray-700 max-h-36 overflow-y-auto">
+                        <span class="text-gray-400 font-semibold block mb-1">Found Articles & Verdict:</span>
+                        <div id="telemetryFound" class="font-mono text-[11px] text-gray-300 space-y-1.5"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl">
+                <h2 class="text-xs font-bold text-gray-200 uppercase tracking-wider mb-3">Persona Controls</h2>
+                <form id="personaForm" class="space-y-3 text-xs">
+                    <div>
+                        <label class="block text-gray-400 mb-1">Active Preset</label>
+                        <select id="personaKey" class="w-full bg-dark-3 border border-gray-700 rounded-xl px-3 py-2 text-gray-200">
+                            <option value="tech_visionary">Tech Visionary & AI Insider</option>
+                            <option value="sarcastic_critic">Sarcastic AI Realist (Humorous)</option>
+                            <option value="educator_guide">Patient AI Mentor</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-400 mb-1">Personal Voice Sample</label>
+                        <textarea id="samplePosts" rows="2" class="w-full bg-dark-3 border border-gray-700 rounded-xl p-2 text-xs text-gray-300" placeholder="Paste tweet/article sample..."></textarea>
+                    </div>
+                    <button type="button" onclick="savePersona()" class="w-full py-2 bg-dark-4 hover:bg-gray-700 text-gray-200 rounded-xl font-semibold border border-gray-600">Save Persona</button>
+                </form>
+            </div>
+        </section>
+
+        <section class="lg:col-span-7 space-y-6">
+            <!-- 9 Supported Multi-Platform Multi-Select Toggles -->
+            <div class="bg-dark-2 border border-gray-custom rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3 shadow-xl">
+                <div class="flex items-center space-x-2">
+                    <span class="text-xs text-gray-300 font-bold uppercase tracking-wider">Platform Toggles</span>
+                    <span class="text-[10px] font-mono text-sky-400 bg-dark-4 border border-gray-700 px-2 py-0.5 rounded">Click to Enable / Disable</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5">
+                    <button id="platBtn_all" onclick="togglePlatform('all')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">All</button>
+                    <button id="platBtn_twitter" onclick="togglePlatform('twitter')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">X</button>
+                    <button id="platBtn_instagram" onclick="togglePlatform('instagram')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">Instagram</button>
+                    <button id="platBtn_facebook" onclick="togglePlatform('facebook')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">Facebook</button>
+                    <button id="platBtn_youtube" onclick="togglePlatform('youtube')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">YouTube</button>
+                    <button id="platBtn_telegram" onclick="togglePlatform('telegram')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">Telegram</button>
+                    <button id="platBtn_linkedin" onclick="togglePlatform('linkedin')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">LinkedIn</button>
+                    <button id="platBtn_reddit" onclick="togglePlatform('reddit')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">Reddit</button>
+                    <button id="platBtn_discord" onclick="togglePlatform('discord')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">Discord</button>
+                    <button id="platBtn_wordpress" onclick="togglePlatform('wordpress')" class="px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105">Blog</button>
+                </div>
+            </div>
+
+            <div id="postsContainer" class="space-y-6"></div>
+        </section>
+    </main>
+
+    <script>
+        let currentMode = 'demo';
+        let activeFilter = 'all';
+        let isLogExpanded = false;
+
+        const eqKeys = [
+            'seriousness', 'formality', 'cynicism', 'technical_depth', 'political_stance',
+            'pacing_length', 'emotional_warmth', 'storytelling_drama', 'authority_boldness', 'metaphor_density',
+            'clickbait_energy', 'tech_jargon', 'action_cta', 'humor_type', 'provocativeness'
+        ];
+
+        const writerArchetypes = [
+            {
+                name: "Dr. Marcus Vance",
+                title: "Academic Research Specialist",
+                desc: "Formal, high technical depth, rigorous academic & research tone.",
+                avatar: "/static/avatars/avatar_marcus.png",
+                vector: { seriousness: 0.8, technical_depth: 0.8, formality: 0.7, cynicism: -0.2, clickbait_energy: -0.6 }
+            },
+            {
+                name: "Sora Takahashi",
+                title: "Cyberpunk Tech Analyst",
+                desc: "High tech depth, bold authority, code-heavy technical insight.",
+                avatar: "/static/avatars/avatar_sora.png",
+                vector: { technical_depth: 0.9, authority_boldness: 0.8, tech_jargon: 0.8, seriousness: 0.4 }
+            },
+            {
+                name: "Elena Rostova",
+                title: "Sarcastic AI Realist",
+                desc: "Witty, high cynicism, cuts through AI hype with sharp humor.",
+                avatar: "/static/avatars/avatar_elena.png",
+                vector: { cynicism: 0.9, seriousness: -0.6, provocativeness: 0.8, humor_type: 0.7 }
+            },
+            {
+                name: "Jax Sterling",
+                title: "Viral Growth Strategist",
+                desc: "High CTR hook energy, punchy pacing, direct call-to-action.",
+                avatar: "/static/avatars/avatar_jax.png",
+                vector: { clickbait_energy: 0.9, action_cta: 0.8, pacing_length: -0.8, authority_boldness: 0.7 }
+            },
+            {
+                name: "Aaliyah Thorne",
+                title: "Empathetic AI Mentor",
+                desc: "Warm emotional tone, encouraging narrative breakdowns.",
+                avatar: "/static/avatars/avatar_aaliyah.png",
+                vector: { emotional_warmth: 0.9, storytelling_drama: 0.8, cynicism: -0.8, formality: -0.4 }
+            },
+            {
+                name: "Kai Chen",
+                title: "Futurist & Deep Essayist",
+                desc: "Rich metaphors, long-form essay pacing, cinematic drama.",
+                avatar: "/static/avatars/avatar_kai.png",
+                vector: { metaphor_density: 0.8, pacing_length: 0.7, storytelling_drama: 0.8, seriousness: 0.5 }
+            }
+        ];
+
+        function openConfigModal() { document.getElementById('configModal').classList.remove('hidden'); }
+        function closeConfigModal() { document.getElementById('configModal').classList.add('hidden'); }
+
+        function showConfigTab(tabName) {
+            document.getElementById('configTabProvider').classList.add('hidden');
+            document.getElementById('configTabMcp').classList.add('hidden');
+            document.getElementById('configTabHelp').classList.add('hidden');
+
+            document.getElementById('tabBtnProvider').className = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
+            document.getElementById('tabBtnMcp').className = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
+            document.getElementById('tabBtnHelp').className = 'px-4 py-2 rounded-xl font-bold bg-dark-3 text-gray-400 hover:text-white border border-gray-700';
+
+            if (tabName === 'provider') {
+                document.getElementById('configTabProvider').classList.remove('hidden');
+                document.getElementById('tabBtnProvider').className = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
+            } else if (tabName === 'mcp') {
+                document.getElementById('configTabMcp').classList.remove('hidden');
+                document.getElementById('tabBtnMcp').className = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
+            } else if (tabName === 'help') {
+                document.getElementById('configTabHelp').classList.remove('hidden');
+                document.getElementById('tabBtnHelp').className = 'px-4 py-2 rounded-xl font-bold bg-gray-200 text-gray-900 shadow';
+            }
+        }
+
+        async function saveProviderConfig() {
+            const payload = {
+                host_mode: document.getElementById('cfgHostMode').value,
+                provider: document.getElementById('cfgProvider').value,
+                openai_api_key: document.getElementById('cfgOpenAIKey').value,
+                gemini_api_key: document.getElementById('cfgGeminiKey').value,
+                anthropic_api_key: document.getElementById('cfgAnthropicKey').value,
+                base_url: document.getElementById('cfgBaseUrl').value
+            };
+            alert(`Provider Settings Saved! Host: ${payload.host_mode.toUpperCase()} | Provider: ${payload.provider.toUpperCase()}`);
+            closeConfigModal();
+        }
+
+        function calculateActiveWriterPersona() {
+            const currentVec = {};
+            eqKeys.forEach(k => {
+                const slider = document.getElementById('eq_' + k);
+                if (slider) currentVec[k] = parseFloat(slider.value);
+            });
+
+            let bestMatch = writerArchetypes[0];
+            let minDistance = Infinity;
+
+            writerArchetypes.forEach(arch => {
+                let dist = 0;
+                Object.keys(arch.vector).forEach(vk => {
+                    const diff = (currentVec[vk] || 0) - arch.vector[vk];
+                    dist += diff * diff;
+                });
+                if (dist < minDistance) {
+                    minDistance = dist;
+                    bestMatch = arch;
+                }
+            });
+
+            const matchPercent = Math.max(78, Math.min(99, Math.round(100 - minDistance * 12)));
+
+            document.getElementById('writerAvatarImg').src = bestMatch.avatar;
+            document.getElementById('writerName').innerText = bestMatch.name;
+            document.getElementById('writerTitle').innerText = bestMatch.title;
+            document.getElementById('writerArchetypeDesc').innerText = bestMatch.desc;
+            document.getElementById('writerMatchBadge').innerText = `${matchPercent}% Style Match`;
+        }
+
+        function updateEqVal(key) {
+            const val = document.getElementById('eq_' + key).value;
+            document.getElementById('val_' + key).innerText = (parseFloat(val) >= 0 ? '+' : '') + parseFloat(val).toFixed(1);
+            calculateActiveWriterPersona();
+        }
+
+        async function loadEqualizer() {
+            const res = await fetch('/api/equalizer');
+            const eq = await res.json();
+            eqKeys.forEach(k => {
+                if (eq[k] !== undefined) {
+                    const slider = document.getElementById('eq_' + k);
+                    if (slider) {
+                        slider.value = eq[k];
+                        document.getElementById('val_' + k).innerText = (parseFloat(eq[k]) >= 0 ? '+' : '') + parseFloat(eq[k]).toFixed(1);
+                    }
+                }
+            });
+            calculateActiveWriterPersona();
+        }
+
+        async function saveEqualizer() {
+            const payload = {};
+            eqKeys.forEach(k => {
+                const slider = document.getElementById('eq_' + k);
+                if (slider) payload[k] = parseFloat(slider.value);
+            });
+            await fetch('/api/equalizer', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(payload)
+            });
+            alert('Equalizer fine-tuning profile saved!');
+        }
+
+        async function loadSampleArticle() {
+            const res = await fetch('/api/sample-article');
+            const data = await res.json();
+            document.getElementById('sampleArticleInput').value = data.sample_article || '';
+        }
+
+        async function saveSampleArticle() {
+            const val = document.getElementById('sampleArticleInput').value;
+            await fetch('/api/sample-article', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ sample_article: val })
+            });
+            alert('Writing voice sample saved!');
+        }
+
+        function toggleLogHeight() {
+            isLogExpanded = !isLogExpanded;
+            const el = document.getElementById('logsContainer');
+            const btn = document.getElementById('expandLogBtn');
+            if (isLogExpanded) {
+                el.className = 'bg-dark-1 rounded-xl p-3 h-[500px] transition-all duration-300 overflow-y-auto font-mono text-[11px] space-y-1.5 text-gray-300 border border-gray-800';
+                btn.innerText = 'Compact Log View (200px)';
+            } else {
+                el.className = 'bg-dark-1 rounded-xl p-3 h-48 transition-all duration-300 overflow-y-auto font-mono text-[11px] space-y-1.5 text-gray-300 border border-gray-800';
+                btn.innerText = 'Expand Log View (500px)';
+            }
+        }
+
+        async function loadTopics() {
+            const res = await fetch('/api/topics');
+            const data = await res.json();
+            document.getElementById('targetTopicsInput').value = data.topics || '';
+        }
+
+        async function saveTopics() {
+            const val = document.getElementById('targetTopicsInput').value;
+            await fetch('/api/topics', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ topics: val })
+            });
+            alert('Persistent target subjects saved!');
+        }
+
+        async function loadSchedule() {
+            const res = await fetch('/api/schedule');
+            const data = await res.json();
+            if (data.hours) document.getElementById('schedIntervalSelect').value = data.hours;
+            if (data.max_posts) document.getElementById('schedMaxPostsSelect').value = data.max_posts;
+            if (data.comfyui_enabled !== undefined) document.getElementById('autoImagesSelect').value = String(data.comfyui_enabled);
+        }
+
+        async function saveSchedule() {
+            const hours = document.getElementById('schedIntervalSelect').value;
+            const max_posts = document.getElementById('schedMaxPostsSelect').value;
+            const comfyui_enabled = document.getElementById('autoImagesSelect').value;
+            await fetch('/api/schedule', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hours: hours, max_posts: max_posts, comfyui_enabled: comfyui_enabled })
+            });
+            alert(`Settings saved! Bulk Images: ${comfyui_enabled.toUpperCase()}`);
+        }
+
+        async function generateSingleTestImage(postId) {
+            alert(`Generating 1 single test image for Post #${postId}...`);
+            const res = await fetch(`/api/posts/${postId}/generate-image`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'generated') {
+                fetchPosts();
+                fetchLogs();
+            } else {
+                alert('Image generation failed or timed out.');
+            }
+        }
+
+        async function triggerScanOnly() {
+            alert('Manual Web Research Scan started!');
+            await fetch('/api/scan', { method: 'POST' });
+            setTimeout(() => { fetchLogs(); fetchTelemetry(); }, 1000);
+        }
+
+        async function setMode(mode) {
+            currentMode = mode;
+            document.getElementById('modeDemoBtn').className = mode === 'demo' ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-200 text-gray-900 shadow' : 'px-3 py-1.5 rounded-lg text-xs font-bold text-gray-400';
+            document.getElementById('modeProdBtn').className = mode === 'production' ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-200 text-gray-900 shadow' : 'px-3 py-1.5 rounded-lg text-xs font-bold text-gray-400';
+            await fetch('/api/mode', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ mode: mode }) });
+        }
+
+        async function fetchLogs() {
+            const res = await fetch('/api/logs');
+            const logs = await res.json();
+            const container = document.getElementById('logsContainer');
+            container.innerHTML = logs.map(l => `
+                <div class="border-b border-gray-900 pb-1">
+                    <span class="text-gray-500">[${new Date(l.timestamp).toLocaleTimeString()}]</span>
+                    <span class="font-bold text-gray-300">[${l.agent_name}]</span>
+                    <span class="${l.log_level === 'SUCCESS' ? 'text-emerald-400' : 'text-gray-300'}">${l.message}</span>
+                </div>
+            `).join('');
+        }
+
+        async function fetchTelemetry() {
+            const res = await fetch('/api/telemetry');
+            const t = await res.json();
+            document.getElementById('pipelineStatusBadge').innerText = `STATUS: ${t.current_stage}`;
+            
+            if (t.active_queries) {
+                document.getElementById('telemetryQueries').innerHTML = t.active_queries.map(q => `<span class="bg-dark-4 text-gray-200 border border-gray-700 px-2 py-0.5 rounded text-[10px]"># ${q}</span>`).join('');
+            }
+            if (t.scanned_sources) {
+                document.getElementById('telemetrySources').innerHTML = t.scanned_sources.map(s => `<div>• ${s}</div>`).join('');
+            }
+            if (t.found_articles) {
+                document.getElementById('telemetryFound').innerHTML = t.found_articles.map(a => `
+                    <div class="border-b border-gray-800 pb-1">
+                        <span class="${a.status.includes('NEW') ? 'text-emerald-400 font-bold' : 'text-gray-500'}">[${a.status}]</span>
+                        <span class="text-gray-200">${a.title}</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        const allPlatformsList = ['twitter', 'instagram', 'facebook', 'youtube', 'telegram', 'linkedin', 'reddit', 'discord', 'wordpress'];
+        let enabledPlatforms = new Set([...allPlatformsList]);
+
+        function updatePlatformToggleUI() {
+            const isAllSelected = allPlatformsList.every(p => enabledPlatforms.has(p));
+            const btnAll = document.getElementById('platBtn_all');
+            if (btnAll) {
+                btnAll.className = isAllSelected 
+                    ? 'px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105' 
+                    : 'px-3 py-1.5 bg-dark-3 text-gray-500 border border-gray-800 rounded-xl text-xs font-semibold opacity-60 hover:opacity-100 transition';
+            }
+
+            allPlatformsList.forEach(p => {
+                const btn = document.getElementById('platBtn_' + p);
+                if (btn) {
+                    if (enabledPlatforms.has(p)) {
+                        btn.className = 'px-3 py-1.5 bg-gray-200 text-gray-900 rounded-xl text-xs font-bold shadow-md border-2 border-white transition-all scale-105';
+                    } else {
+                        btn.className = 'px-3 py-1.5 bg-dark-3 text-gray-500 border border-gray-800 rounded-xl text-xs font-semibold opacity-60 hover:opacity-100 transition';
+                    }
+                }
+            });
+        }
+
+        function togglePlatform(platform) {
+            if (platform === 'all') {
+                if (allPlatformsList.every(p => enabledPlatforms.has(p))) {
+                    enabledPlatforms.clear();
+                } else {
+                    enabledPlatforms = new Set([...allPlatformsList]);
+                }
+            } else {
+                if (enabledPlatforms.has(platform)) {
+                    enabledPlatforms.delete(platform);
+                } else {
+                    enabledPlatforms.add(platform);
+                }
+            }
+            updatePlatformToggleUI();
+            fetchPosts();
+        }
+
+        async function fetchPosts() {
+            const res = await fetch('/api/posts');
+            const posts = await res.json();
+            const container = document.getElementById('postsContainer');
+            const filtered = posts.filter(p => enabledPlatforms.has((p.platform || '').toLowerCase()));
+            if (filtered.length === 0) {
+                container.innerHTML = `<div class="bg-dark-2 border border-gray-custom rounded-2xl p-12 text-center text-gray-400"><p>No generated posts match active platform toggles.</p></div>`;
+                return;
+            }
+            container.innerHTML = filtered.map(p => `
+                <div class="bg-dark-2 border border-gray-custom rounded-2xl p-6 shadow-xl space-y-3">
+                    <div class="flex items-center justify-between bg-dark-1 p-3 rounded-xl border border-gray-800">
+                        <div class="flex items-center space-x-2">
+                            <span class="px-3 py-1 rounded text-xs font-bold uppercase bg-dark-4 text-gray-200">${p.platform}</span>
+                            <button onclick="generateSingleTestImage(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-sky-400 border border-sky-800 transition">Generate 1 Test Image</button>
+                        </div>
+                        <span class="text-xs font-mono text-emerald-400">CTR: ${p.ctr_score}% | AI Score: ${p.ai_detection_score}</span>
+                    </div>
+                    <h3 class="text-sm font-bold text-gray-100">${p.headline}</h3>
+                    <div class="text-xs text-gray-300 whitespace-pre-wrap bg-dark-3 p-3 rounded-xl">${p.content}</div>
+                    ${p.image_path ? `<img src="/static/images/${p.image_path.replace(/\\/g, '/').split('/').pop()}" class="w-full rounded-xl max-h-72 object-cover border border-gray-700">` : ''}
+                </div>
+            `).join('');
+        }
+
+        const imgEngineKeys = ['comfyui_local', 'stability_ai', 'comfy_org', 'ideogram_card'];
+        let activeImageProvider = 'comfyui_local';
+
+        async function loadImageProvider() {
+            const res = await fetch('/api/image-provider');
+            const data = await res.json();
+            if (data.provider) {
+                updateImageProviderUI(data.provider);
+            }
+        }
+
+        function updateImageProviderUI(provider) {
+            activeImageProvider = provider;
+            const badge = document.getElementById('activeImgEngineBadge');
+            if (badge) badge.innerText = provider.replace('_', ' ').toUpperCase();
+
+            imgEngineKeys.forEach(k => {
+                const btn = document.getElementById('imgEngineBtn_' + k);
+                if (btn) {
+                    if (k === provider) {
+                        btn.className = 'px-3 py-1.5 rounded-xl font-bold bg-gray-200 text-gray-900 border-2 border-white shadow transition-all scale-105';
+                    } else {
+                        btn.className = 'px-3 py-1.5 rounded-xl font-semibold bg-dark-3 text-gray-400 border border-gray-700 hover:text-white transition';
+                    }
+                }
+            });
+        }
+
+        async function setImageProvider(provider) {
+            updateImageProviderUI(provider);
+            await fetch('/api/image-provider', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ provider: provider })
+            });
+        }
+
+        async function stopAllAgents() {
+            await fetch('/api/stop', { method: 'POST' });
+            alert('EMERGENCY STOP ACTIVATED! All background agent operations halted.');
+            fetchTelemetry();
+            fetchLogs();
+        }
+
+        async function triggerPipeline() { alert('Super Agent cycle triggered!'); await fetch('/api/trigger', { method: 'POST' }); setTimeout(() => { fetchLogs(); fetchTelemetry(); fetchPosts(); }, 1500); }
+        async function savePersona() { alert('Persona saved!'); }
+
+        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); fetchLogs(); fetchTelemetry(); fetchPosts();
+        setInterval(() => { fetchLogs(); fetchTelemetry(); }, 2000);
+    </script>
+</body>
+</html>

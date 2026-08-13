@@ -1,0 +1,80 @@
+system:
+  mode: "demo"                  # "demo" or "production"
+  daemon_interval_minutes: 30  # Search and process interval
+  auto_publish: false          # If false, requires manual UI approval before posting
+  max_posts_per_cycle: 3
+
+database:
+  sqlite_path: "data/social_monster.db"
+  chroma_path: "data/vector_db"
+
+comfyui:
+  server_address: "127.0.0.1:8188"
+  enabled: false
+  workflow_type: "txt2img"
+  default_width: 1024
+  default_height: 1024
+
+llm:
+  provider: "ollama_or_openai" # supports local Ollama or OpenAI / Anthropic APIs
+  base_url: "http://127.0.0.1:11434" # Ollama local endpoint, or API key fallback
+  model_name: "llama3"
+  api_key: ""
+
+personas:
+  active_persona: "tech_visionary"
+  presets:
+    tech_visionary:
+      name: "Tech Visionary & AI Insider"
+      humor_level: 4
+      cynicism_level: 3
+      technical_depth: 8
+      political_stance: "neutral"
+      writing_style: "Authoritative yet accessible, uses punchy short paragraphs, strong analogies, insightful future predictions."
+    sarcastic_critic:
+      name: "Sarcastic AI Realist"
+      humor_level: 9
+      cynicism_level: 8
+      technical_depth: 6
+      political_stance: "critical"
+      writing_style: "Witty, slightly cynical, calls out AI hype and buzzwords, uses memes and sharp humor."
+    educator_guide:
+      name: "Patient AI Mentor"
+      humor_level: 3
+      cynicism_level: 1
+      technical_depth: 5
+      political_stance: "neutral"
+      writing_style: "Encouraging, clear step-by-step breakdowns, action-oriented tips, friendly conversational tone."
+
+platforms:
+  twitter:
+    enabled: true
+    max_length: 280
+  instagram:
+    enabled: true
+  facebook:
+    enabled: true
+  youtube:
+    enabled: true
+  telegram:
+    enabled: true
+  linkedin:
+    enabled: true
+  reddit:
+    enabled: true
+    target_subreddits: ["r/ArtificialIntelligence", "r/LocalLLaMA", "r/MachineLearning"]
+  discord:
+    enabled: true
+  wordpress:
+    enabled: true
+    site_url: ""
+
+research_sources:
+  rss_feeds:
+    - "https://news.ycombinator.com/rss"
+    - "https://techcrunch.com/category/artificial-intelligence/feed/"
+    - "https://rss.arxiv.org/rss/cs.AI"
+  subreddits:
+    - "r/MachineLearning"
+    - "r/LocalLLaMA"
+    - "r/ArtificialIntelligence"
