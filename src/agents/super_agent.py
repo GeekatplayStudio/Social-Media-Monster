@@ -4,6 +4,7 @@ from sqlmodel import Session, select
 from src.core.db import engine, init_db, log_event, load_config
 from src.core.models import SystemSetting
 from src.core.state_manager import TemporalStateManager
+from src.agents.traffic_controller_agent import TrafficControllerAgent
 from src.agents.research_agent import ResearchAgent
 from src.agents.verifier_agent import VerifierAgent
 from src.agents.writer_agent import WriterAgent
@@ -16,8 +17,8 @@ class SuperAgent:
     """
     Super Agent Master Controller:
     Initializes strictly into HIBERNATING (IDLE) mode.
+    Integrates TrafficControllerAgent to prevent unnecessary web traffic when quotas are met.
     Supports Emergency Stop (stop_requested) to halt all background agent tasks instantly.
-    Does NOT auto-trigger unrequested scans on startup.
     """
     def __init__(self):
         init_db()
@@ -29,6 +30,7 @@ class SuperAgent:
         self.stop_requested = False
 
         # Sub-agents
+        self.traffic_controller = TrafficControllerAgent()
         self.research_agent = ResearchAgent()
         self.verifier_agent = VerifierAgent()
         self.writer_agent = WriterAgent()
@@ -43,6 +45,7 @@ class SuperAgent:
             "active_queries": [],
             "scanned_sources": [],
             "found_articles": [],
+            "traffic_status": "Traffic Normal",
             "formatting_status": "Ready",
             "mode": self.mode,
             "schedule_hours": self.get_schedule_hours(),
@@ -96,16 +99,25 @@ class SuperAgent:
         log_event("SuperAgent", f"=== STARTING PIPELINE CYCLE (MODE: {self.mode.upper()}, SCHEDULE: Every {sched_hours} hrs) ===", level="INFO")
 
         try:
-            # Stage 1: Research Agent
+            # Stage 0: Traffic Controller Check
             if self.stop_requested: return self._handle_stopped()
-            self.telemetry["current_stage"] = "RESEARCH"
-            self.telemetry["active_agent"] = "ResearchAgent"
-            self.temporal_state.save_checkpoint("RESEARCH", {"queries": self.telemetry["active_queries"]})
-            new_trends = self.research_agent.run()
-            
-            self.telemetry["active_queries"] = self.research_agent.last_scan_telemetry.get("active_queries", [])
-            self.telemetry["scanned_sources"] = self.research_agent.last_scan_telemetry.get("scanned_sources", [])
-            self.telemetry["found_articles"] = self.research_agent.last_scan_telemetry.get("found_articles", [])
+            traffic_policy = self.traffic_controller.evaluate_traffic_policy()
+            self.telemetry["traffic_status"] = traffic_policy.get("reason", "Traffic Evaluated")
+
+            new_trends = 0
+            if traffic_policy.get("allow_scan", True):
+                # Stage 1: Research Agent
+                if self.stop_requested: return self._handle_stopped()
+                self.telemetry["current_stage"] = "RESEARCH"
+                self.telemetry["active_agent"] = "ResearchAgent"
+                self.temporal_state.save_checkpoint("RESEARCH", {"queries": self.telemetry["active_queries"]})
+                new_trends = self.research_agent.run()
+                
+                self.telemetry["active_queries"] = self.research_agent.last_scan_telemetry.get("active_queries", [])
+                self.telemetry["scanned_sources"] = self.research_agent.last_scan_telemetry.get("scanned_sources", [])
+                self.telemetry["found_articles"] = self.research_agent.last_scan_telemetry.get("found_articles", [])
+            else:
+                log_event("SuperAgent", "Traffic Controller suspended web scanning. Re-using existing verified news items.", level="INFO")
 
             # Stage 2: Verifier Agent
             if self.stop_requested: return self._handle_stopped()
@@ -128,7 +140,7 @@ class SuperAgent:
             self.temporal_state.save_checkpoint("HUMANIZING", {"drafts": drafts})
             optimized = self.humanizer_agent.run()
 
-            # Stage 5: Validator & QA Agent
+            # Stage 5: Validator & Final Content Manager QA Gate
             if self.stop_requested: return self._handle_stopped()
             self.telemetry["current_stage"] = "QA_VALIDATION"
             self.telemetry["active_agent"] = "ValidatorAgent"
