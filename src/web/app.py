@@ -261,6 +261,11 @@ def generate_single_test_image(post_id: int):
     image_path = super_agent.visual_agent.generate_single_test_image(post_id)
     return {"status": "generated" if image_path else "error", "image_path": os.path.basename(image_path)}
 
+@app.post("/api/posts/{post_id}/generate-article")
+def generate_single_test_article(post_id: int):
+    result = super_agent.writer_agent.generate_single_test_article(post_id)
+    return result
+
 @app.post("/api/scan")
 def trigger_scan_only(background_tasks: BackgroundTasks):
     super_agent.stop_requested = False

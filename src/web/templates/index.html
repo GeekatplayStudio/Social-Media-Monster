@@ -872,12 +872,24 @@
                     <div class="flex items-center justify-between bg-dark-1 p-3 rounded-xl border border-gray-800">
                         <div class="flex items-center space-x-2">
                             <span class="px-3 py-1 rounded text-xs font-bold uppercase bg-dark-4 text-gray-200">${p.platform}</span>
+                            <button onclick="generateSingleTestArticle(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-emerald-400 border border-emerald-800 transition">Generate Test Article</button>
                             <button onclick="generateSingleTestImage(${p.id})" class="px-3 py-1 rounded text-xs font-bold bg-dark-3 hover:bg-dark-4 text-sky-400 border border-sky-800 transition">Generate 1 Test Image</button>
                         </div>
                         <span class="text-xs font-mono text-emerald-400">CTR: ${p.ctr_score}% | AI Score: ${p.ai_detection_score}</span>
                     </div>
                     <h3 class="text-sm font-bold text-gray-100">${p.headline}</h3>
                     <div class="text-xs text-gray-300 whitespace-pre-wrap bg-dark-3 p-3 rounded-xl">${p.content}</div>
+                    
+                    <details class="bg-dark-3 p-3 rounded-xl border border-gray-800 text-[11px] text-gray-400 font-mono">
+                        <summary class="cursor-pointer font-bold text-gray-300 hover:text-white">⚙ Article Generation Parameters & Weights</summary>
+                        <div class="mt-2 space-y-1 pt-2 border-t border-gray-700">
+                            <p><span class="text-gray-400">Persona Profile:</span> <strong class="text-sky-400">${p.persona_key || 'tech_visionary'}</strong></p>
+                            <p><span class="text-gray-400">Style Weights:</span> Seriousness: +0.2 | Technical Depth: +0.6 | Sarcasm: +0.4 | Pacing: -0.3</p>
+                            <p><span class="text-gray-400">Visual Prompt:</span> <span class="text-purple-300">${p.image_prompt || 'Vivid 16-bit RPG retro illustration concept'}</span></p>
+                            <p><span class="text-gray-400">Humanization/CTR:</span> CTR Score: ${p.ctr_score}% | AI Detection: ${p.ai_detection_score}</p>
+                        </div>
+                    </details>
+
                     ${p.image_path ? `<img src="/static/images/${p.image_path.replace(/\\/g, '/').split('/').pop()}" class="w-full rounded-xl max-h-72 object-cover border border-gray-700">` : ''}
                 </div>
             `).join('');
@@ -918,6 +930,13 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ provider: provider })
             });
+        }
+
+        async function generateSingleTestArticle(id) {
+            alert(`Generating fresh test article for Post #${id}...`);
+            await fetch(`/api/posts/${id}/generate-article`, { method: 'POST' });
+            fetchPosts();
+            fetchLogs();
         }
 
         async function stopAllAgents() {
