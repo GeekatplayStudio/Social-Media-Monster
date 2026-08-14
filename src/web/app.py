@@ -26,11 +26,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="SocialMediaMonster Control Dashboard & MCP Server", lifespan=lifespan)
 
 images_dir = "data/outputs/images"
+videos_dir = "data/outputs/videos"
 avatars_dir = "data/outputs/avatars"
 os.makedirs(images_dir, exist_ok=True)
+os.makedirs(videos_dir, exist_ok=True)
 os.makedirs(avatars_dir, exist_ok=True)
 
 app.mount("/static/images", StaticFiles(directory=images_dir), name="images")
+app.mount("/static/videos", StaticFiles(directory=videos_dir), name="videos")
 app.mount("/static/avatars", StaticFiles(directory=avatars_dir), name="avatars")
 
 super_agent = SuperAgent()
@@ -240,6 +243,39 @@ def set_image_provider(data: dict):
         log_event("WebDashboard", f"Active Image Generation Provider changed to: {provider.upper()}", level="INFO")
     return {"status": "provider_saved", "provider": provider}
 
+@app.get("/api/media-mode")
+def get_media_mode():
+    with Session(engine) as session:
+        mode_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_media_mode")).first()
+        provider_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_video_provider")).first()
+        return {
+            "media_mode": mode_setting.value if mode_setting else "image",
+            "video_provider": provider_setting.value if provider_setting else "ffmpeg_template"
+        }
+
+@app.post("/api/media-mode")
+def set_media_mode(data: dict):
+    mode = data.get("media_mode", "image")
+    provider = data.get("video_provider", "ffmpeg_template")
+    with Session(engine) as session:
+        m_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_media_mode")).first()
+        if not m_setting:
+            m_setting = SystemSetting(key_name="active_media_mode", value=mode)
+        else:
+            m_setting.value = mode
+        session.add(m_setting)
+
+        v_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_video_provider")).first()
+        if not v_setting:
+            v_setting = SystemSetting(key_name="active_video_provider", value=provider)
+        else:
+            v_setting.value = provider
+        session.add(v_setting)
+
+        session.commit()
+        log_event("WebDashboard", f"Active Media Mode changed to: {mode.upper()} (Video Provider: {provider.upper()})", level="INFO")
+    return {"status": "media_mode_saved", "media_mode": mode, "video_provider": provider}
+
 @app.get("/api/equalizer")
 def get_equalizer():
     with Session(engine) as session:
@@ -354,6 +390,21 @@ def generate_single_test_image(post_id: int):
     return {
         "status": "generated" if image_path else "error",
         "image_path": os.path.basename(image_path) if image_path else "",
+    }
+
+@app.post("/api/posts/{post_id}/generate-video")
+def generate_single_test_video(post_id: int):
+    with Session(engine) as session:
+        draft = session.get(PostDraft, post_id)
+        if not draft:
+            raise HTTPException(status_code=404, detail="Post draft not found")
+        verified_news_id = draft.verified_news_id
+
+    video_path = super_agent.visual_agent.generate_master_video_for_story(verified_news_id)
+    return {
+        "status": "generated" if video_path else "error",
+        "video_path": os.path.basename(video_path) if video_path else "",
+        "verified_news_id": verified_news_id
     }
 
 
@@ -493,12 +544,22 @@ def get_posts(limit: int = 60, status: str = None, platform: str = None):
         result = []
         for p in posts:
             p_dict = p.model_dump()
-            filename = (p_dict.get("image_path") or "").replace("\\", "/").split("/")[-1]
-            # Only advertise an image the server can actually serve.
-            if filename and os.path.exists(os.path.join(images_dir, filename)):
-                p_dict["image_path"] = filename
+            img_filename = (p_dict.get("image_path") or "").replace("\\", "/").split("/")[-1]
+            media_filename = (p_dict.get("media_path") or "").replace("\\", "/").split("/")[-1]
+
+            # Check if video file exists
+            if media_filename and os.path.exists(os.path.join(videos_dir, media_filename)):
+                p_dict["media_path"] = media_filename
+                p_dict["media_type"] = "video"
+            else:
+                p_dict["media_path"] = None
+
+            # Check if image file exists
+            if img_filename and os.path.exists(os.path.join(images_dir, img_filename)):
+                p_dict["image_path"] = img_filename
             else:
                 p_dict["image_path"] = None
+
             result.append(p_dict)
         return result
 

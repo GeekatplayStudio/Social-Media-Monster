@@ -27,6 +27,8 @@ class VerifiedNews(SQLModel, table=True):
     key_takeaways: str  # JSON string or bullet points
     created_at: datetime = Field(default_factory=datetime.now)
     status: str = "verified" # verified, disputed, rejected
+    master_video_path: Optional[str] = None
+    master_video_prompt: Optional[str] = None
 
 class PersonaProfile(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
@@ -48,6 +50,8 @@ class PostDraft(SQLModel, table=True):
     content: str
     image_prompt: Optional[str] = None
     image_path: Optional[str] = None
+    media_type: str = "image"  # "image" or "video"
+    media_path: Optional[str] = None
     seo_keywords: Optional[str] = None
     ctr_score: float = 0.0
     ai_detection_score: float = 0.0  # Estimated humanization score (lower AI score = more human)

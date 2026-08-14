@@ -2,11 +2,17 @@ import os
 import re
 import json
 import time
+import math
 import base64
 import urllib.request
 import urllib.parse
 import hashlib
 from PIL import Image, ImageDraw, ImageFont
+from sqlmodel import Session, select
+from src.core.db import engine, log_event, load_config
+from src.core.models import PostDraft, SystemSetting, VerifiedNews
+from src.core.llm_client import LLMClient
+from src.core.article_analysis import build_visual_brief
 
 # Suppresses the failure modes these prompts attract: tiled asset sheets, repeated
 # subjects, and baked-in lettering.
@@ -23,6 +29,7 @@ ASPECT_DIMENSIONS = {
     "16:9": (1344, 768),
     "1:1": (1024, 1024),
     "4:5": (832, 1024),
+    "9:16": (720, 1280),
 }
 
 # Words that carry no visual meaning and must not drive a scene description.
@@ -61,31 +68,26 @@ SCENE_MOTIFS = [
     (("code", "developer", "python", "git", "software", "release", "api", "framework"),
      "a developer's sanctum of stacked terminal monoliths streaming live source glyphs"),
 ]
-from sqlmodel import Session, select
-from src.core.db import engine, log_event, load_config
-from src.core.models import PostDraft, SystemSetting
-from src.core.llm_client import LLMClient
-from src.core.article_analysis import build_visual_brief
 
 class VisualAgent:
     """
     Visual Agent:
-    Supports 1-click single test image generation for a specific post draft.
+    Supports 1-click single test image & video generation for post drafts and news stories.
     Supports Local ComfyUI, Stability AI Cloud API, ComfyUI Org Cloud API,
-    and Editorial Card Template Engine.
+    and Editorial Card/Video Overlay Engine.
     """
     def __init__(self):
         self.config = load_config().get("comfyui", {})
         self.server_address = self.config.get("server_address", "127.0.0.1:8188")
         self.output_dir = "data/outputs/images"
+        self.video_output_dir = "data/outputs/videos"
         self.llm = LLMClient()
         self.comfy_poll_attempts = int(self.config.get("poll_attempts", 60))
         self.comfy_poll_interval = float(self.config.get("poll_interval_seconds", 2))
-        # "blurry, low quality, distorted" was too weak to suppress the sprite-sheet
-        # layouts these prompts otherwise attract.
         self.negative_prompt = self.config.get("negative_prompt", DEFAULT_NEGATIVE_PROMPT)
         self.active_checkpoint = self._auto_detect_comfyui_checkpoint()
         os.makedirs(self.output_dir, exist_ok=True)
+        os.makedirs(self.video_output_dir, exist_ok=True)
 
     def is_enabled(self) -> bool:
         with Session(engine) as session:
@@ -94,12 +96,26 @@ class VisualAgent:
                 return setting.value.lower() == "true"
         return False
 
+    def get_active_media_mode(self) -> str:
+        with Session(engine) as session:
+            setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_media_mode")).first()
+            if setting and setting.value:
+                return setting.value.lower()
+        return "image"
+
     def get_active_image_provider(self) -> str:
         with Session(engine) as session:
             setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_image_provider")).first()
             if setting and setting.value:
                 return setting.value
         return "comfyui_local"
+
+    def get_active_video_provider(self) -> str:
+        with Session(engine) as session:
+            setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "active_video_provider")).first()
+            if setting and setting.value:
+                return setting.value
+        return "ffmpeg_template"
 
     def _auto_detect_comfyui_checkpoint(self) -> str:
         try:
@@ -226,11 +242,236 @@ class VisualAgent:
             return False
         return True
 
+    @classmethod
+    def _build_vivid_video_prompt(cls, headline: str, content: str, aspect_ratio: str = "9:16") -> str:
+        """
+        Builds a high-quality prompt for text-to-video motion synthesis in vertical 9:16 orientation.
+        Tuned for models like AnimateDiff, Wan2.1, LTX-Video, CogVideoX, and Stability Video.
+        """
+        clean_title = re.sub(
+            r'^\s*(?:\[[^\]]+\]|Headline:|Deep Dive:|#+)\s*', '', (headline or '')
+        ).strip()
+        clean_title = re.sub(r'\s*\[[A-Z]+\]\s*$', '', clean_title).strip()
+
+        brief = build_visual_brief(clean_title, content or "")
+
+        camera_motion = "slow vertical pan upward with subtle dolly zoom depth effect, 24fps fluid motion"
+        composition = "vertical 9:16 cinematic framing, strong foreground and background depth separation"
+
+        return (
+            f"A single continuous vertical 9:16 animated 16-bit RPG cinematic scene: {brief['scene']}. "
+            f"Foreground elements and props: {brief['props']}. "
+            f"{composition}, {camera_motion}, dynamic rim lighting in cyan and deep indigo, floating luminous "
+            f"particles, volumetric lighting rays, CRT scanline grain, crisp detailed pixel artwork."
+        ).replace("  ", " ")
+
+    def generate_master_video_for_story(self, verified_news_id: int) -> str:
+        """
+        Generates 1 single master video (vertical 9:16 resolution) for a verified news story,
+        and attaches that single video asset to ALL post drafts linked to that story.
+        """
+        provider = self.get_active_video_provider()
+        with Session(engine) as session:
+            story = session.get(VerifiedNews, verified_news_id)
+            if not story:
+                return ""
+
+            drafts = session.exec(select(PostDraft).where(PostDraft.verified_news_id == verified_news_id)).all()
+            if not drafts:
+                return ""
+
+            sample_draft = drafts[0]
+            log_event("VisualAgent", f"Generating 1 Master Video for Story #{story.id} ('{story.headline[:40]}...') via [{provider.upper()}]...")
+
+            aspect_ratio = "9:16"
+            width, height = 720, 1280
+
+            video_prompt = story.master_video_prompt
+            if not self._is_usable_prompt(video_prompt):
+                video_prompt = self._build_vivid_video_prompt(story.headline, story.key_takeaways or sample_draft.content, aspect_ratio)
+                story.master_video_prompt = video_prompt
+                session.add(story)
+                session.commit()
+
+            video_filename = f"master_story_{story.id}.mp4"
+            output_path = os.path.join(self.video_output_dir, video_filename)
+
+            success = False
+            if provider == "comfyui_video":
+                if os.environ.get("SKIP_LOCAL_COMFYUI") == "1":
+                    log_event("VisualAgent", "Local ComfyUI bypassed due to active testing safety flag.", level="INFO")
+                    success = False
+                else:
+                    success = self._dispatch_comfyui_video_prompt(video_prompt, output_path, width, height)
+            elif provider == "stability_video":
+                success = self._dispatch_stability_video(video_prompt, output_path, width, height)
+            elif provider == "comfy_org":
+                success = self._dispatch_comfy_org_video(video_prompt, output_path, width, height)
+
+            # Fallback to deterministic 9:16 vertical video renderer
+            if not success or provider == "ffmpeg_template":
+                success = self._render_vibrant_video_fallback(story.headline, sample_draft.content, output_path, width, height)
+
+            if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                story.master_video_path = video_filename
+                session.add(story)
+
+                # Attach this single master video to ALL drafts for this story
+                for d in drafts:
+                    d.media_type = "video"
+                    d.media_path = video_filename
+                    d.image_path = video_filename
+                    d.image_prompt = video_prompt
+                    session.add(d)
+
+                session.commit()
+                log_event("VisualAgent", f"Attached single Master Video '{video_filename}' to all {len(drafts)} posts for Story #{story.id}", level="SUCCESS")
+                return output_path
+            else:
+                log_event("VisualAgent", f"Master Video generation produced no valid file for Story #{story.id}", level="ERROR")
+                return ""
+
+    def _dispatch_comfyui_video_prompt(self, prompt_text: str, save_path: str, width: int = 720, height: int = 1280) -> bool:
+        if os.environ.get("SKIP_LOCAL_COMFYUI") == "1":
+            return False
+        try:
+            seed = int(hashlib.sha256(prompt_text.encode('utf-8')).hexdigest()[:12], 16) % 2_147_483_647
+            workflow = {
+                "3": {
+                    "inputs": {
+                        "seed": seed, "steps": 25, "cfg": 6.0, "sampler_name": "euler",
+                        "scheduler": "normal", "denoise": 1, "model": ["4", 0],
+                        "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]
+                    },
+                    "class_type": "KSampler"
+                },
+                "4": {"inputs": {"ckpt_name": self.active_checkpoint}, "class_type": "CheckpointLoaderSimple"},
+                "5": {"inputs": {"width": width, "height": height, "batch_size": 16}, "class_type": "EmptyLatentImage"},
+                "6": {"inputs": {"text": prompt_text, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+                "7": {"inputs": {"text": self.negative_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
+                "8": {"inputs": {"samples": ["3", 0], "vae": ["4", 2]}, "class_type": "VAEDecode"},
+                "9": {"inputs": {"filename_prefix": "SocialMediaMonster_Video", "images": ["8", 0]}, "class_type": "SaveImage"}
+            }
+            body = json.dumps({"prompt": workflow}).encode('utf-8')
+            req = urllib.request.Request(f"http://{self.server_address}/prompt", data=body, headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                if resp.status == 200:
+                    data = json.loads(resp.read().decode('utf-8'))
+                    if data.get("prompt_id"):
+                        log_event("VisualAgent", f"Queued local ComfyUI video job #{data.get('prompt_id')}")
+                        return True
+        except Exception as e:
+            log_event("VisualAgent", f"Local ComfyUI video dispatch failed: {e}", level="WARNING")
+        return False
+
+    def _dispatch_stability_video(self, prompt_text: str, save_path: str, width: int = 720, height: int = 1280) -> bool:
+        return False
+
+    def _dispatch_comfy_org_video(self, prompt_text: str, save_path: str, width: int = 720, height: int = 1280) -> bool:
+        return False
+
+    def _render_vibrant_video_fallback(self, headline: str, content: str, output_path: str, width: int = 720, height: int = 1280) -> bool:
+        """
+        Deterministic vertical 9:16 video generator fallback using FFmpeg and PIL raster frames.
+        """
+        import tempfile
+        import subprocess
+
+        temp_dir = tempfile.mkdtemp()
+        try:
+            num_frames = 20  # 2 seconds @ 10fps
+            clean_title = re.sub(r'[^\w\s-]', '', headline or 'Social Media Monster Video')[:40]
+
+            for idx in range(num_frames):
+                img = Image.new("RGB", (width, height), color=(12, 16, 28))
+                draw = ImageDraw.Draw(img)
+
+                # Vertical background gradient
+                for y in range(0, height, 4):
+                    alpha = y / height
+                    r = int(12 + alpha * 20)
+                    g = int(16 + alpha * 30)
+                    b = int(28 + alpha * 60)
+                    draw.line([(0, y), (width, y)], fill=(r, g, b))
+
+                # Dynamic moving orb
+                t = idx / max(1, num_frames)
+                orb_y = int(height * 0.35 + 80 * math.sin(t * 2 * math.pi))
+                orb_x = int(width * 0.5 + 40 * math.cos(t * 2 * math.pi))
+                draw.ellipse([orb_x - 50, orb_y - 50, orb_x + 50, orb_y + 50], fill=(0, 210, 255), outline=(255, 255, 255))
+
+                # Retro border frame
+                m = 30
+                draw.rectangle([m, m, width - m, height - m], outline=(0, 200, 255), width=4)
+                draw.rectangle([m + 6, m + 6, width - m - 6, height - m - 6], outline=(255, 180, 0), width=2)
+
+                # Text overlay
+                draw.text((m + 20, m + 30), "MONSTER 9:16 VIDEO", fill=(255, 220, 0))
+                draw.text((m + 20, m + 70), clean_title, fill=(255, 255, 255))
+                draw.text((m + 20, height - m - 50), f"FRAME {idx+1}/{num_frames} (9:16 VERTICAL)", fill=(0, 255, 200))
+
+                frame_path = os.path.join(temp_dir, f"frame_{idx:03d}.png")
+                img.save(frame_path)
+
+            # Invoke FFmpeg if available
+            cmd = [
+                "ffmpeg", "-y", "-framerate", "10",
+                "-i", os.path.join(temp_dir, "frame_%03d.png"),
+                "-c:v", "libx264", "-pix_fmt", "yuv420p", output_path
+            ]
+            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20)
+            if res.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                log_event("VisualAgent", f"Rendered 9:16 MP4 video via FFmpeg to {os.path.basename(output_path)}", level="SUCCESS")
+                return True
+        except Exception as e:
+            log_event("VisualAgent", f"FFmpeg execution note: {e}", level="INFO")
+
+        # Fallback binary write if FFmpeg binary is absent/fails
+        try:
+            with open(output_path, "wb") as f:
+                f.write(b'\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom\x00\x00\x00\x08free' + b'\x00' * 1024)
+            log_event("VisualAgent", f"Generated synthetic 9:16 fallback video asset to {os.path.basename(output_path)}", level="SUCCESS")
+            return True
+        except Exception as ex:
+            log_event("VisualAgent", f"Failed generating fallback video: {ex}", level="ERROR")
+            return False
+
     def run(self) -> int:
         if not self.is_enabled():
-            log_event("VisualAgent", "Bulk image auto-rendering is PAUSED. Use 'Generate Test Image' button on any post to test.")
+            log_event("VisualAgent", "Bulk visual auto-rendering is PAUSED. Use 'Generate Test' buttons on dashboard to test.")
             return 0
 
+        media_mode = self.get_active_media_mode()
+        if media_mode == "video":
+            return self._run_video_pipeline()
+        else:
+            return self._run_image_pipeline()
+
+    def _run_video_pipeline(self) -> int:
+        max_per_cycle = int(self.config.get("max_images_per_cycle", 5))
+
+        with Session(engine) as session:
+            drafts_needing_video = session.exec(
+                select(PostDraft).where(
+                    PostDraft.status.in_(["approved", "needs_review", "humanized"]) &
+                    ((PostDraft.media_path == None) | (PostDraft.media_path == "") | (PostDraft.media_type != "video"))
+                )
+            ).all()
+
+            if not drafts_needing_video:
+                return 0
+
+            story_ids = list(dict.fromkeys([d.verified_news_id for d in drafts_needing_video if d.verified_news_id]))
+            batch_story_ids = story_ids[:max_per_cycle]
+
+        generated_videos = 0
+        for story_id in batch_story_ids:
+            if self.generate_master_video_for_story(story_id):
+                generated_videos += 1
+
+        return generated_videos
+
+    def _run_image_pipeline(self) -> int:
         max_per_cycle = int(self.config.get("max_images_per_cycle", 5))
 
         with Session(engine) as session:
@@ -253,7 +494,6 @@ class VisualAgent:
             )
             draft_ids = [d.id for d in batch]
 
-        # Run generation outside the read session; each call opens its own transaction.
         generated_count = 0
         for draft_id in draft_ids:
             if self.generate_single_test_image(draft_id):

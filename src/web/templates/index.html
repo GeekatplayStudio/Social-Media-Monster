@@ -164,6 +164,28 @@
                     </div>
                 </div>
 
+                <div class="space-y-3 bg-dark-3 p-4 rounded-xl border border-gray-800">
+                    <h3 class="font-bold text-gray-200">Media Generation Mode (Image vs Video)</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-gray-400 mb-1">Active Media Mode</label>
+                            <select id="cfgMediaMode" onchange="saveMediaMode()" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono">
+                                <option value="image">Image Mode (Static Artworks)</option>
+                                <option value="video">Video Mode (1 Master 9:16 Vertical Video per Story)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-gray-400 mb-1">Video Provider Engine</label>
+                            <select id="cfgVideoProvider" onchange="saveMediaMode()" class="w-full bg-dark-1 border border-gray-700 rounded-lg px-3 py-2 text-gray-200 font-mono">
+                                <option value="ffmpeg_template">FFmpeg / PIL Video Template Engine (Fallback/Offline)</option>
+                                <option value="comfyui_video">ComfyUI Local Video (AnimateDiff / Wan2.1 / LTX-Video)</option>
+                                <option value="stability_video">Stability AI Video Cloud API</option>
+                                <option value="comfy_org">ComfyUI Org Cloud Video API</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
                 <button onclick="saveProviderConfig()" class="px-5 py-2.5 bg-gray-200 hover:bg-white text-gray-900 font-bold rounded-xl shadow transition">Save Provider Configuration</button>
             </div>
 
@@ -845,6 +867,42 @@
             }
         }
 
+        async function loadMediaMode() {
+            try {
+                const res = await fetch('/api/media-mode');
+                const data = await res.json();
+                if (data.media_mode && document.getElementById('cfgMediaMode')) {
+                    document.getElementById('cfgMediaMode').value = data.media_mode;
+                }
+                if (data.video_provider && document.getElementById('cfgVideoProvider')) {
+                    document.getElementById('cfgVideoProvider').value = data.video_provider;
+                }
+            } catch (e) {}
+        }
+
+        async function saveMediaMode() {
+            const mode = document.getElementById('cfgMediaMode').value;
+            const provider = document.getElementById('cfgVideoProvider').value;
+            await fetch('/api/media-mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ media_mode: mode, video_provider: provider })
+            });
+            alert(`Media Mode saved: ${mode.toUpperCase()} (Video Provider: ${provider.toUpperCase()})`);
+        }
+
+        async function generateSingleTestVideo(postId) {
+            alert(`Generating 1 Master 9:16 Vertical Video for Story (Post #${postId}) and attaching to all sibling posts...`);
+            const res = await fetch(`/api/posts/${postId}/generate-video`, { method: 'POST' });
+            const data = await res.json();
+            if (data.status === 'generated') {
+                fetchPosts();
+                fetchLogs();
+            } else {
+                alert('Video generation failed.');
+            }
+        }
+
         async function triggerScanOnly() {
             alert('Manual Web Research Scan started!');
             await fetch('/api/scan', { method: 'POST' });
@@ -961,6 +1019,7 @@
                             <span class="w-px h-5 bg-gray-800"></span>
                             <button onclick="generateSingleTestArticle(${p.id})" class="${ICON_BTN} hover:text-emerald-400 hover:border-emerald-800" title="Regenerate this post's text">✎</button>
                             <button onclick="generateSingleTestImage(${p.id})" class="${ICON_BTN} hover:text-sky-400 hover:border-sky-800" title="Generate image for this post">▣</button>
+                            <button onclick="generateSingleTestVideo(${p.id})" class="${ICON_BTN} hover:text-purple-400 hover:border-purple-800" title="Generate 9:16 Master Vertical Video for Story">📹</button>
                             <button onclick="approvePost(${p.id})" class="${ICON_BTN} hover:text-emerald-400 hover:border-emerald-700" title="Approve for publishing">✓</button>
                             <button onclick="rejectPost(${p.id})" class="${ICON_BTN} hover:text-rose-400 hover:border-rose-800" title="Reject this draft">✕</button>
                         </div>
@@ -975,11 +1034,19 @@
                             <p><span class="text-gray-400">Style Weights:</span> ${liveStyleWeightsLabel()}</p>
                             <p><span class="text-gray-400">SEO Keywords:</span> ${escapeHtml(p.seo_keywords || '—')}</p>
                             <p><span class="text-gray-400">Visual Prompt:</span> <span class="text-purple-300">${escapeHtml(p.image_prompt || 'Not generated yet')}</span></p>
-                            <p><span class="text-gray-400">Humanization/CTR:</span> CTR Score: ${p.ctr_score}% | AI Detection: ${p.ai_detection_score}</p>
+                            <p><span class="text-gray-400">Media Type / Asset:</span> <span class="text-sky-300 font-bold">${escapeHtml(p.media_type || 'image')}</span> ${p.media_path ? '(' + escapeHtml(p.media_path) + ')' : ''}</p>
                         </div>
                     </details>
 
-                    ${p.image_path ? `<img src="/static/images/${encodeURIComponent(p.image_path)}" class="w-full rounded-xl max-h-72 object-cover border border-gray-700">` : ''}
+                    ${p.media_type === 'video' && p.media_path ? `
+                        <div class="relative rounded-xl overflow-hidden border border-purple-500/50 bg-black">
+                            <video controls autoplay loop muted class="w-full max-h-96 object-contain mx-auto">
+                                <source src="/static/videos/${encodeURIComponent(p.media_path)}" type="video/mp4">
+                                Your browser does not support video playback.
+                            </video>
+                            <span class="absolute top-2 right-2 bg-purple-600/90 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow uppercase">9:16 Vertical Video</span>
+                        </div>
+                    ` : (p.image_path ? `<img src="/static/images/${encodeURIComponent(p.image_path)}" class="w-full rounded-xl max-h-72 object-cover border border-gray-700">` : '')}
                 </div>
             `).join('');
         }
@@ -1267,7 +1334,7 @@
         async function triggerPipeline() { alert('Super Agent cycle triggered!'); await fetch('/api/trigger', { method: 'POST' }); setTimeout(() => { fetchLogs(); fetchTelemetry(); fetchPosts(); }, 1500); }
         async function savePersona() { alert('Persona saved!'); }
 
-        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); loadProviderConfig(); fetchLogs(); fetchTelemetry(); fetchPosts();
+        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); loadMediaMode(); loadProviderConfig(); fetchLogs(); fetchTelemetry(); fetchPosts();
         setInterval(() => { fetchLogs(); fetchTelemetry(); }, 2000);
     </script>
 </body>

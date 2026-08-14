@@ -22,7 +22,29 @@ engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
 
 def init_db():
     SQLModel.metadata.create_all(engine)
+    migrate_columns()
     seed_defaults()
+
+def migrate_columns():
+    from sqlalchemy import text
+    with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE verifiednews ADD COLUMN master_video_path VARCHAR"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE verifiednews ADD COLUMN master_video_prompt VARCHAR"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE postdraft ADD COLUMN media_type VARCHAR DEFAULT 'image'"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE postdraft ADD COLUMN media_path VARCHAR"))
+        except Exception:
+            pass
+        conn.commit()
 
 DEFAULT_EQUALIZER = {
     "seriousness": 0.2,       # -1 (Funny) to +1 (Serious)

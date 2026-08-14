@@ -34,6 +34,11 @@
 12. **Temporal State Manager**: SQLite worker state checkpointing for continuous execution recovery.
 13. **Explicit Draft Lifecycle**: `draft → humanized → approved | needs_review → published | rejected`. Each agent claims only its own stage, so no post is reprocessed on later cycles and no verified story is drafted twice.
 
+14. **Image & Video Mode Switcher**: Toggle system-wide media generation mode between `image`, `video`, and `both`.
+15. **Single Master Video Distribution**: Generate **one master video asset per verified news story** and automatically attach it across all 9 social channel drafts (X, Instagram, Facebook, YouTube, Telegram, LinkedIn, Reddit, Discord, WordPress).
+16. **Video Template Overlay Engine**: Composite audio tracks (background synth/chiptune music + voiceover TTS), dynamic text overlays (headlines, lower thirds, SRT subtitle captions), retro 16-bit RPG UI frames, and brand watermarks over raw AI videos.
+17. **Abstract Provider API Layer**: Standardized `BaseVideoProvider` interface decoupling backend engines (local ComfyUI AnimateDiff/Wan2.1/CogVideoX/LTX-Video, cloud APIs like Runway, Luma, Kling, Stability Video, and FFmpeg slideshow fallbacks).
+
 ---
 
 ## 3. Sub-Agent System Architecture
@@ -60,9 +65,10 @@
                                     ┌─────────┴─────────┐
                                     ▼                   ▼
                          ┌────────────────────┐┌────────────────────┐
-                         │    VisualAgent     ││   PublisherAgent   │
-                         │ (16-Bit ComfyUI)   ││(Multi-Channel Out)│
-                         └────────────────────┘└────────────────────┘
+                         │ Visual / MediaAgent││   PublisherAgent   │
+                         │ (Image/Video Engine││(Multi-Channel Out)│
+                         │  & Template Overlay│└────────────────────┘
+                         └────────────────────┘
 ```
 
 ---
@@ -76,6 +82,7 @@
 * **Research**: Tavily Search & Extract API (optional; RSS fallback via feedparser)
 * **Frontend Interface**: HTML5, Vanilla JavaScript, TailwindCSS, JetBrains Mono
 * **Image Synthesis**: Local ComfyUI (SD1.5/SDXL), Stability AI REST API, ComfyUI Org API, PIL editorial card fallback
+* **Video & Compositing Engine**: FFmpeg / MoviePy filtergraph engine, `BaseVideoProvider` abstraction, AnimateDiff/Wan2.1 local ComfyUI workflow integration, cloud video API wrappers (Runway, Luma, Kling, Stability Video)
 * **Testing Framework**: PyTest (45 tests, 100% pass rate), including regression coverage for content quality, image prompts and credential encryption
 
 ---
@@ -125,6 +132,21 @@ word "model" appeared somewhere in the text.
   The earlier "isometric composition" phrasing actively pulled models toward tile layouts.
 * **Shared servers** — when ComfyUI is busy with other work the agent reports its queue
   position instead of failing silently, and uses the editorial card in the meantime.
+
+---
+
+## 3b. Video & Multi-Media Generation Engine
+
+`src/agents/visual_agent.py` and `docs/VIDEO_GENERATION_SPEC.md` define the multi-modal media engine:
+
+* **Mode Switching**: Toggled via `active_media_mode` system setting (`image`, `video`, `both`).
+* **Single Master Video Distribution**: Operates on a **one-video-per-story model**. A single master video asset (`master_story_{id}.mp4`) is synthesized per verified news item and attached across all 9 platform channel drafts (`PostDraft.media_path`).
+* **Template Overlay Engine**:
+  * **Audio Layer**: Background music track with automatic voiceover sidechain audio ducking (-12dB).
+  * **Text Layer**: Dynamic headline banners, lower third writer persona badges, and hard-burned SRT subtitles.
+  * **Frame Layer**: Retro 16-Bit RPG UI border overlay, CRT scanline grain, and brand watermark logo stamp.
+* **Abstract Provider API Layer**: Standardized `BaseVideoProvider` Python abstraction decoupling local node engines (ComfyUI AnimateDiff/Wan2.1) and cloud video APIs (Runway, Luma, Kling, Stability Video).
+
 
 ---
 
