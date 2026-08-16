@@ -103,8 +103,44 @@ if (-not $SkipBuild) {
 # --------------------------------------------------------------- Port availability
 $inUse = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if ($inUse) {
-    Write-Host "ERROR: port $Port is already in use by PID $($inUse[0].OwningProcess)." -ForegroundColor Red
-    Write-Host "       Use -Port <other> or stop the other process." -ForegroundColor Red
+    $holderPid = $inUse[0].OwningProcess
+    $holder = Get-Process -Id $holderPid -ErrorAction SilentlyContinue
+    $holderCmd = (Get-CimInstance Win32_Process -Filter "ProcessId = $holderPid" -ErrorAction SilentlyContinue).CommandLine
+
+    $isOurs = $false
+    if ($holderCmd) {
+        $normalized = $holderCmd.Replace('/', '\')
+        $isOurs = ($normalized -match 'SocialMediaMonster') -or
+                  ($normalized -match '\bmain\.py\b' -and $normalized -notmatch 'backend\.')
+    }
+
+    Write-Host ""
+    Write-Host "ERROR: port $Port is already in use." -ForegroundColor Red
+    Write-Host "  PID     : $holderPid ($($holder.ProcessName))" -ForegroundColor Red
+    Write-Host "  Command : $holderCmd" -ForegroundColor Red
+    Write-Host ""
+
+    if ($isOurs) {
+        Write-Host "  That is another SocialMediaMonster instance. Stop it first:" -ForegroundColor Yellow
+        Write-Host "      .\scripts\stop.ps1 -Port $Port" -ForegroundColor Yellow
+    } else {
+        Write-Host "  That is a DIFFERENT application, so it was left alone." -ForegroundColor Yellow
+        # Offer a port that is actually free rather than making the user hunt for one.
+        $free = $null
+        foreach ($candidate in ($Port + 1)..($Port + 20)) {
+            if (-not (Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue)) {
+                $free = $candidate
+                break
+            }
+        }
+        if ($free) {
+            Write-Host "  Start on a free port instead:" -ForegroundColor Yellow
+            Write-Host "      .\scripts\start.ps1 -Port $free" -ForegroundColor Yellow
+        } else {
+            Write-Host "  Pick a free port with: .\scripts\start.ps1 -Port <number>" -ForegroundColor Yellow
+        }
+    }
+    Write-Host ""
     exit 1
 }
 

@@ -38,18 +38,9 @@ if [ "$PORT" -eq 0 ]; then
     if [ -f "$PORT_FILE" ]; then PORT="$(cat "$PORT_FILE")"; else PORT=8000; fi
 fi
 
-# --------------------------------------------------------------- Graceful agent halt
-if [ "$FORCE" -eq 0 ]; then
-    step "Requesting emergency stop of background agents"
-    if curl -fsS --max-time 5 -X POST "http://127.0.0.1:$PORT/api/stop" >/dev/null 2>&1; then
-        ok "Agents halted"
-        sleep 0.7
-    else
-        warn "Server did not answer on port $PORT (it may already be down)"
-    fi
-fi
-
 # --------------------------------------------------------------- Resolve target PID
+# Identify the target BEFORE sending anything: the graceful-stop request must not be
+# posted at an unrelated service that happens to hold this port.
 TARGET_PID=""
 if [ -f "$PID_FILE" ]; then
     RECORDED="$(cat "$PID_FILE")"
@@ -63,8 +54,29 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 if [ -z "$TARGET_PID" ] && command -v lsof >/dev/null 2>&1; then
-    TARGET_PID="$(lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n1)"
-    [ -n "$TARGET_PID" ] && ok "Found process listening on port $PORT: PID $TARGET_PID"
+    CANDIDATE_PID="$(lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n1)"
+    if [ -n "$CANDIDATE_PID" ]; then
+        CANDIDATE_CMD="$(ps -p "$CANDIDATE_PID" -o args= 2>/dev/null || echo '')"
+        # Only stop a process that is actually this application: port 8000 is a common
+        # default, so killing whatever holds it can take down an unrelated server.
+        if echo "$CANDIDATE_CMD" | grep -qE 'SocialMediaMonster|(^|/)main\.py' && ! echo "$CANDIDATE_CMD" | grep -q 'backend\.'; then
+            TARGET_PID="$CANDIDATE_PID"
+            ok "Found our server listening on port $PORT: PID $TARGET_PID"
+        elif [ "$FORCE" -eq 1 ]; then
+            TARGET_PID="$CANDIDATE_PID"
+            warn "PID $CANDIDATE_PID on port $PORT is NOT SocialMediaMonster, but --force was given."
+        else
+            echo ""
+            echo -e "${RED}REFUSING TO STOP: port $PORT is held by a different program.${NC}" >&2
+            echo -e "${RED}  PID     : $CANDIDATE_PID${NC}" >&2
+            echo -e "${RED}  Command : $CANDIDATE_CMD${NC}" >&2
+            echo ""
+            warn "This is not SocialMediaMonster, so it was left running."
+            warn "If you really meant to stop it: ./scripts/stop.sh --port $PORT --force"
+            echo ""
+            exit 1
+        fi
+    fi
 fi
 
 if [ -z "$TARGET_PID" ]; then
@@ -72,6 +84,17 @@ if [ -z "$TARGET_PID" ]; then
     warn "Nothing to stop - no server running on port $PORT."
     echo ""
     exit 0
+fi
+
+# --------------------------------------------------------------- Graceful agent halt
+if [ "$FORCE" -eq 0 ]; then
+    step "Requesting emergency stop of background agents"
+    if curl -fsS --max-time 5 -X POST "http://127.0.0.1:$PORT/api/stop" >/dev/null 2>&1; then
+        ok "Agents halted"
+        sleep 0.7
+    else
+        warn "Server did not answer on /api/stop (stopping the process directly)"
+    fi
 fi
 
 # --------------------------------------------------------------- Terminate

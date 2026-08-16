@@ -33,6 +33,17 @@ function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 
+# Recognises this project's server by its command line, so an unrelated process holding
+# the same port is never mistaken for ours.
+function Test-IsOurServer($commandLine) {
+    if (-not $commandLine) { return $false }
+    $normalized = $commandLine.Replace('/', '\')
+    if ($normalized -match 'SocialMediaMonster') { return $true }
+    # Launched as "python main.py" from the project root.
+    if ($normalized -match '\bmain\.py\b' -and $normalized -notmatch 'backend\.') { return $true }
+    return $false
+}
+
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Magenta
 Write-Host " SOCIAL MEDIA MONSTER - STOP" -ForegroundColor Magenta
@@ -47,19 +58,9 @@ if ($Port -eq 0) {
     }
 }
 
-# --------------------------------------------------------------- Graceful agent halt
-if (-not $Force) {
-    Write-Step "Requesting emergency stop of background agents"
-    try {
-        Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/stop" -Method Post -TimeoutSec 5 -ErrorAction Stop | Out-Null
-        Write-Ok "Agents halted"
-        Start-Sleep -Milliseconds 700
-    } catch {
-        Write-Warn "Server did not answer on port $Port (it may already be down)"
-    }
-}
-
 # --------------------------------------------------------------- Resolve target PID
+# Identify the target BEFORE sending anything: the graceful-stop request must not be
+# posted at an unrelated service that happens to hold this port.
 $targetPid = $null
 
 if (Test-Path $PidFile) {
@@ -76,8 +77,29 @@ if (Test-Path $PidFile) {
 if (-not $targetPid) {
     $conn = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
     if ($conn) {
-        $targetPid = $conn[0].OwningProcess
-        Write-Ok "Found process listening on port ${Port}: PID $targetPid"
+        $candidatePid = $conn[0].OwningProcess
+        $cmdLine = (Get-CimInstance Win32_Process -Filter "ProcessId = $candidatePid" -ErrorAction SilentlyContinue).CommandLine
+
+        # Only stop a process that is actually this application. Port 8000 is a common
+        # default, so blindly killing whatever holds it can take down an unrelated server.
+        if (Test-IsOurServer $cmdLine) {
+            $targetPid = $candidatePid
+            Write-Ok "Found our server listening on port ${Port}: PID $targetPid"
+        } elseif ($Force) {
+            $targetPid = $candidatePid
+            Write-Warn "PID $candidatePid on port $Port is NOT SocialMediaMonster, but -Force was given."
+            Write-Warn "  $cmdLine"
+        } else {
+            Write-Host ""
+            Write-Host "REFUSING TO STOP: port $Port is held by a different program." -ForegroundColor Red
+            Write-Host "  PID     : $candidatePid" -ForegroundColor Red
+            Write-Host "  Command : $cmdLine" -ForegroundColor Red
+            Write-Host ""
+            Write-Host "  This is not SocialMediaMonster, so it was left running." -ForegroundColor Yellow
+            Write-Host "  If you really meant to stop it: .\scripts\stop.ps1 -Port $Port -Force" -ForegroundColor Yellow
+            Write-Host ""
+            exit 1
+        }
     }
 }
 
@@ -86,6 +108,18 @@ if (-not $targetPid) {
     Write-Warn "Nothing to stop - no server running on port $Port."
     Write-Host ""
     exit 0
+}
+
+# --------------------------------------------------------------- Graceful agent halt
+if (-not $Force) {
+    Write-Step "Requesting emergency stop of background agents"
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/stop" -Method Post -TimeoutSec 5 -ErrorAction Stop | Out-Null
+        Write-Ok "Agents halted"
+        Start-Sleep -Milliseconds 700
+    } catch {
+        Write-Warn "Server did not answer on /api/stop (stopping the process directly)"
+    }
 }
 
 # --------------------------------------------------------------- Terminate

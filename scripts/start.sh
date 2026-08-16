@@ -94,7 +94,31 @@ fi
 
 # --------------------------------------------------------------- Port availability
 if command -v lsof >/dev/null 2>&1 && lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    die "port $PORT is already in use. Use --port <other> or stop the other process."
+    HOLDER_PID="$(lsof -nP -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -n1)"
+    HOLDER_CMD="$(ps -p "$HOLDER_PID" -o args= 2>/dev/null || echo '')"
+
+    echo ""
+    echo -e "${RED}ERROR: port $PORT is already in use.${NC}" >&2
+    echo -e "${RED}  PID     : $HOLDER_PID${NC}" >&2
+    echo -e "${RED}  Command : $HOLDER_CMD${NC}" >&2
+    echo ""
+
+    if echo "$HOLDER_CMD" | grep -qE 'SocialMediaMonster|(^|/)main\.py' && ! echo "$HOLDER_CMD" | grep -q 'backend\.'; then
+        warn "That is another SocialMediaMonster instance. Stop it first:"
+        warn "    ./scripts/stop.sh --port $PORT"
+    else
+        warn "That is a DIFFERENT application, so it was left alone."
+        FREE=""
+        for candidate in $(seq $((PORT + 1)) $((PORT + 20))); do
+            if ! lsof -nP -iTCP:"$candidate" -sTCP:LISTEN >/dev/null 2>&1; then FREE="$candidate"; break; fi
+        done
+        if [ -n "$FREE" ]; then
+            warn "Start on a free port instead:"
+            warn "    ./scripts/start.sh --port $FREE"
+        fi
+    fi
+    echo ""
+    exit 1
 fi
 
 export SMM_HOST="$BIND_HOST"
