@@ -18,7 +18,13 @@ class PublisherAgent:
     """
 
     def __init__(self):
-        self.config = load_config().get("platforms", {})
+        full_config = load_config()
+        self.config = full_config.get("platforms", {})
+        # A post is meant to go out WITH its supporting image or video. Publishing an
+        # asset-less draft cannot be undone, so the default is to wait for the artwork.
+        self.require_media = bool(
+            full_config.get("system", {}).get("require_media_before_publish", True)
+        )
         self.store = PlatformCredentialStore()
 
     def run(self, dry_run: bool = False) -> int:
@@ -83,6 +89,17 @@ class PublisherAgent:
                 f"{spec['label']} has no credentials yet. Add them under Channel Connections.",
             )
 
+        # research -> write -> attach one asset -> publish. Holding the draft at
+        # "approved" means the next cycle sends it once the artwork exists, rather than
+        # posting a bare text update that cannot be recalled.
+        if self.require_media and not self._has_media(draft):
+            return ChannelResult(
+                False,
+                "No image or video attached yet. The post stays approved and will publish "
+                "on the next cycle once its master asset is rendered. (Enable bulk visuals, "
+                "or set system.require_media_before_publish: false to post text-only.)",
+            )
+
         creds = self.store.get_credentials(platform)
         payload = {
             "headline": draft.headline or "",
@@ -95,6 +112,11 @@ class PublisherAgent:
             return ChannelResult(True, f"Dry run: {spec['label']} is connected and would receive this post.")
 
         return publish_to_channel(platform, creds, payload)
+
+    @staticmethod
+    def _has_media(draft: PostDraft) -> bool:
+        """True when the draft carries a rendered image or video filename."""
+        return bool((getattr(draft, "media_path", "") or "").strip() or (draft.image_path or "").strip())
 
     @staticmethod
     def _public_image_url(creds: dict, draft: PostDraft) -> str:

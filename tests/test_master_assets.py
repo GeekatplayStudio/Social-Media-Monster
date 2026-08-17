@@ -152,6 +152,120 @@ def test_many_stories_produce_varied_staging():
     assert len(combos) >= 5, f"staging barely varies across stories: {len(combos)} distinct"
 
 
+# --------------------------------------------------------------- render economy
+
+def test_render_count_equals_story_count_not_post_count(monkeypatch, tmp_path):
+    """The whole point: 3 stories on 10 channels must cost 3 renders, not 30."""
+    platforms = ["twitter", "instagram", "facebook", "youtube", "telegram",
+                 "linkedin", "reddit", "discord", "wordpress"]
+    for i in range(3):
+        _story_with_drafts(f"Story {i}: fab capacity expands", "Two lines open in 2027.", platforms)
+
+    agent = VisualAgent()
+    agent.output_dir = str(tmp_path)
+    monkeypatch.setattr(agent, "is_enabled", lambda: True)
+    monkeypatch.setattr(agent, "get_active_media_mode", lambda: "image", raising=False)
+    monkeypatch.setattr(agent, "_dispatch_comfyui_prompt", lambda *a, **k: False)
+    monkeypatch.setattr(agent, "_dispatch_comfyui_dit", lambda *a, **k: False)
+
+    renders = {"n": 0}
+    def counting_card(h, c, p, sp):
+        renders["n"] += 1
+        with open(sp, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\n" + b"0" * 64)
+    monkeypatch.setattr(agent, "_render_vibrant_article_card", counting_card)
+
+    agent.run()
+    assert renders["n"] == 3, f"expected 1 render per story, got {renders['n']} for 27 posts"
+
+    # A second pass must not re-render anything.
+    agent.run()
+    assert renders["n"] == 3, "assets were re-rendered on a later cycle"
+
+
+# --------------------------------------------------------------- publish ordering
+
+def _approved_draft_without_media():
+    with Session(engine) as session:
+        news = VerifiedNews(trend_id=1, headline="No artwork yet", verified_facts="F", key_takeaways="K")
+        session.add(news)
+        session.commit()
+        draft = PostDraft(verified_news_id=news.id, platform="telegram", persona_key="tech_visionary",
+                          headline=news.headline, content="Body text.", status="approved")
+        session.add(draft)
+        session.commit()
+        return draft.id
+
+
+def _connected_publisher(monkeypatch, sent):
+    from src.agents.publisher_agent import PublisherAgent
+    from src.core.channel_clients import ChannelResult
+    monkeypatch.setattr("src.agents.publisher_agent.publish_to_channel",
+                        lambda plat, creds, post: (sent.append(plat) or ChannelResult(True, "ok", external_id="X1")))
+    publisher = PublisherAgent()
+    publisher.store.describe = lambda platform: {"enabled": True, "configured": True,
+                                                 "status": "connected", "account": "a"}
+    publisher.store.get_credentials = lambda platform: {"bot_token": "x", "chat_id": "y"}
+    return publisher
+
+
+def test_post_without_artwork_is_held_not_published(monkeypatch):
+    draft_id = _approved_draft_without_media()
+    sent = []
+    publisher = _connected_publisher(monkeypatch, sent)
+
+    assert publisher.run() == 0
+    assert sent == [], "a draft with no image or video must not be dispatched"
+
+    with Session(engine) as session:
+        assert session.get(PostDraft, draft_id).status == "approved", "it must stay retryable"
+
+
+def test_post_publishes_once_artwork_is_attached(monkeypatch):
+    draft_id = _approved_draft_without_media()
+    with Session(engine) as session:
+        draft = session.get(PostDraft, draft_id)
+        draft.image_path = "master_story_1.png"
+        draft.media_path = "master_story_1.png"
+        session.add(draft)
+        session.commit()
+
+    sent = []
+    publisher = _connected_publisher(monkeypatch, sent)
+    assert publisher.run() == 1
+    assert sent == ["telegram"]
+
+    with Session(engine) as session:
+        draft = session.get(PostDraft, draft_id)
+        assert draft.status == "published"
+        assert draft.published_at is not None
+        assert draft.external_post_id == "X1"
+
+
+def test_published_posts_are_never_sent_twice(monkeypatch):
+    draft_id = _approved_draft_without_media()
+    with Session(engine) as session:
+        draft = session.get(PostDraft, draft_id)
+        draft.image_path = "master_story_1.png"
+        session.add(draft)
+        session.commit()
+
+    sent = []
+    publisher = _connected_publisher(monkeypatch, sent)
+    assert publisher.run() == 1
+    sent.clear()
+    assert publisher.run() == 0, "an already published post must not be re-sent"
+    assert sent == []
+
+
+def test_text_only_publishing_can_be_opted_into(monkeypatch):
+    _approved_draft_without_media()
+    sent = []
+    publisher = _connected_publisher(monkeypatch, sent)
+    publisher.require_media = False
+    assert publisher.run() == 1, "operators who want text-only posts can disable the gate"
+
+
 # --------------------------------------------------------------- comfy failure handling
 
 def test_comfy_error_is_reported_immediately(monkeypatch):

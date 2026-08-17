@@ -29,6 +29,7 @@ ENV/
 
 # Generated output
 data/outputs/images/test_post_*.png
+data/outputs/images/master_story_*.png
 data/outputs/videos/*.mp4
 data/vector_db/
 

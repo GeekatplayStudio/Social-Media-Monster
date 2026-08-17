@@ -3,6 +3,8 @@ system:
   daemon_interval_minutes: 30  # Search and process interval
   auto_publish: false          # Requires manual UI approval before posting if false
   max_posts_per_cycle: 3
+  require_media_before_publish: true   # Hold a post until its image/video is attached.
+                                       # false publishes text-only posts immediately.
 
 google_oauth:
   enabled_remote_only: true       # Bypassed on local desktop, enforced on remote/production

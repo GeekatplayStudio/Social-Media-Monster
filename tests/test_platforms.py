@@ -203,9 +203,12 @@ def _approved_draft(platform):
         news = VerifiedNews(trend_id=1, headline="H", verified_facts="F", key_takeaways="K")
         session.add(news)
         session.commit()
+        # Drafts reach the publisher with their master asset already attached: the
+        # pipeline renders one image/video per story before anything is dispatched.
         draft = PostDraft(verified_news_id=news.id, platform=platform, persona_key="tech_visionary",
                           headline="Test headline", content="A body of text long enough to publish.",
-                          status="approved")
+                          status="approved", image_path="master_story_1.png",
+                          media_path="master_story_1.png")
         session.add(draft)
         session.commit()
         return draft.id
