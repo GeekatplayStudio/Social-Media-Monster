@@ -134,8 +134,9 @@ class VisualAgent:
                         # with SDXL and Flux installed still rendered on SD 1.5 - which
                         # duplicates subjects badly above its native 512px and produced
                         # the tiled "asset sheet" look instead of a single scene.
-                        for preferred in ["sd_xl_base", "sdxl", "sd_xl", "flux1-dev", "flux",
-                                          "hidream", "zimage", "v2-1", "v1-5", "sd15"]:
+                        for preferred in ["zimage", "z_image", "z-image", "sd_xl_base", "sdxl",
+                                          "sd_xl", "flux1-dev", "flux", "hidream",
+                                          "v2-1", "v1-5", "sd15"]:
                             for name in ckpt_list:
                                 if preferred in name.lower():
                                     return name
@@ -149,13 +150,29 @@ class VisualAgent:
         return self.config.get("default_checkpoint", "v1-5-pruned-emaonly.safetensors")
 
     def generate_single_test_image(self, post_id: int) -> str:
+        """
+        Dashboard "generate image" action for one post.
+
+        When the post belongs to a story it re-renders that story's MASTER image and
+        re-attaches it to every draft of the story, so all channels keep showing the same
+        artwork. Only an orphan draft falls back to a standalone per-post render.
+        """
+        with Session(engine) as session:
+            draft = session.get(PostDraft, post_id)
+            if not draft:
+                return ""
+            story_id = draft.verified_news_id
+
+        if story_id:
+            return self.generate_master_image_for_story(story_id, force=True)
+
         provider = self.get_active_image_provider()
         with Session(engine) as session:
             draft = session.get(PostDraft, post_id)
             if not draft:
                 return ""
 
-            log_event("VisualAgent", f"Generating test image for Post #{draft.id} ({draft.platform}) using [{provider.upper()}]...")
+            log_event("VisualAgent", f"Generating standalone image for orphan Post #{draft.id} ({draft.platform}) using [{provider.upper()}]...")
 
             aspect_ratio = "16:9" if draft.platform in ["twitter", "wordpress", "facebook", "youtube"] \
                 else "1:1" if draft.platform in ["instagram", "discord", "telegram"] else "4:5"
@@ -331,37 +348,270 @@ class VisualAgent:
                 log_event("VisualAgent", f"Master Video generation produced no valid file for Story #{story.id}", level="ERROR")
                 return ""
 
+    def _dispatch_comfyui_dit(self, prompt_text: str, save_path: str, width: int, height: int,
+                              seed: int, trio: dict) -> bool:
+        """Text-to-image for transformer models loaded as separate UNET + CLIP + VAE."""
+        steps = int(self.config.get("image_steps", 8))
+        cfg_scale = float(self.config.get("image_cfg", 1.5))
+        try:
+            workflow = {
+                "1": {"inputs": {"unet_name": trio["unet"], "weight_dtype": "default"}, "class_type": "UNETLoader"},
+                "2": {"inputs": {"clip_name": trio["clip"], "type": trio["clip_type"]}, "class_type": "CLIPLoader"},
+                "3": {"inputs": {"vae_name": trio["vae"]}, "class_type": "VAELoader"},
+                "4": {"inputs": {"text": prompt_text, "clip": ["2", 0]}, "class_type": "CLIPTextEncode"},
+                "5": {"inputs": {"text": self.negative_prompt, "clip": ["2", 0]}, "class_type": "CLIPTextEncode"},
+                "6": {"inputs": {"width": width, "height": height, "batch_size": 1}, "class_type": "EmptySD3LatentImage"},
+                "7": {"inputs": {"seed": seed, "steps": steps, "cfg": cfg_scale,
+                                 "sampler_name": "euler", "scheduler": "simple", "denoise": 1,
+                                 "model": ["1", 0], "positive": ["4", 0], "negative": ["5", 0],
+                                 "latent_image": ["6", 0]}, "class_type": "KSampler"},
+                "8": {"inputs": {"samples": ["7", 0], "vae": ["3", 0]}, "class_type": "VAEDecode"},
+                "9": {"inputs": {"filename_prefix": "SocialMonster_Image", "images": ["8", 0]}, "class_type": "SaveImage"},
+            }
+            body = json.dumps({"prompt": workflow}).encode('utf-8')
+            req = urllib.request.Request(f"http://{self.server_address}/prompt", data=body,
+                                         headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                if resp.status != 200:
+                    return False
+                payload = json.loads(resp.read().decode('utf-8'))
+
+            prompt_id = payload.get("prompt_id")
+            if not prompt_id:
+                log_event("VisualAgent", f"ComfyUI rejected the image workflow: {str(payload)[:200]}", level="WARNING")
+                return False
+
+            log_event("VisualAgent",
+                      f"Dispatched image job #{prompt_id[:8]} on '{trio['unet']}' "
+                      f"({width}x{height}, {steps} steps)")
+            return self._await_comfy_output(prompt_id, save_path, attempts=self.comfy_poll_attempts)
+        except Exception as e:
+            log_event("VisualAgent", f"ComfyUI transformer image dispatch failed: {e}", level="WARNING")
+            return False
+
+    def _resolve_video_models(self) -> dict:
+        """
+        Finds the LTX video transformer, its text encoder and its video VAE.
+
+        LTX 2.5 ships as a bare transformer, so CheckpointLoaderSimple cannot load it -
+        it needs UNETLoader + CLIPLoader(type "ltxv") + the LTX video VAE.
+        """
+        cfg = self.config
+        wanted = {
+            "unet": cfg.get("video_unet", ""),
+            "clip": cfg.get("video_clip", ""),
+            "vae": cfg.get("video_vae", ""),
+        }
+        if all(wanted.values()):
+            return {**wanted, "clip_type": cfg.get("video_clip_type", "ltxv")}
+
+        try:
+            req = urllib.request.Request(f"http://{self.server_address}/object_info",
+                                         headers={'User-Agent': 'SocialMediaMonster/1.0'})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                info = json.loads(resp.read().decode('utf-8'))
+        except Exception:
+            return {}
+
+        def options(node, field):
+            try:
+                value = info[node]["input"]["required"][field][0]
+                return value if isinstance(value, list) else []
+            except Exception:
+                return []
+
+        def first(candidates, pool):
+            for c in candidates:
+                for name in pool:
+                    if c.lower() == name.lower():
+                        return name
+            for c in candidates:
+                for name in pool:
+                    if c in name.lower():
+                        return name
+            return ""
+
+        # Newest first; distilled variants render far faster at similar quality.
+        unet = wanted["unet"] or first(
+            ["ltx-2.5-22b-distilled", "ltx-2.5", "ltx-2.3-22b-distilled", "ltx-2.3", "ltx-2"],
+            options("UNETLoader", "unet_name"))
+        clip = wanted["clip"] or first(
+            ["gemma4-12b-with-proj-ltx-2.5", "ltx-2.5", "ltx-2.3_text_projection"],
+            options("CLIPLoader", "clip_name"))
+        vae = wanted["vae"] or first(
+            ["ltx-2.5-video-vae-bf16.safetensors", "ltx-2.5-video-vae", "LTX23_video_vae_bf16.safetensors"],
+            options("VAELoader", "vae_name"))
+
+        if not (unet and clip and vae):
+            return {}
+        return {"unet": unet, "clip": clip, "vae": vae,
+                "clip_type": cfg.get("video_clip_type", "ltxv")}
+
     def _dispatch_comfyui_video_prompt(self, prompt_text: str, save_path: str, width: int = 720, height: int = 1280) -> bool:
+        """
+        Text-to-video through the LTXV graph.
+
+        The previous implementation loaded the IMAGE checkpoint, asked EmptyLatentImage for
+        a batch of 16 stills and saved them with SaveImage, so it could never produce an
+        mp4. It also returned True the moment the job was queued, which both reported a
+        success that had not happened and suppressed the ffmpeg fallback.
+        """
         if os.environ.get("SKIP_LOCAL_COMFYUI") == "1":
             return False
+
+        models = self._resolve_video_models()
+        if not models:
+            log_event(
+                "VisualAgent",
+                "No complete LTX video model set found in ComfyUI (needs transformer + text "
+                "encoder + video VAE). Set comfyui.video_unet / video_clip / video_vae; "
+                "using the local video fallback instead.",
+                level="WARNING",
+            )
+            return False
+
+        fps = float(self.config.get("video_fps", 24))
+        seconds = float(self.config.get("video_seconds", 4))
+        # LTX expects a frame count of 8n+1.
+        length = max(9, int(round((fps * seconds - 1) / 8)) * 8 + 1)
+        # Latents are built on a 32px grid.
+        vid_w = max(256, (width // 32) * 32)
+        vid_h = max(256, (height // 32) * 32)
+
         try:
             seed = int(hashlib.sha256(prompt_text.encode('utf-8')).hexdigest()[:12], 16) % 2_147_483_647
             workflow = {
+                "1": {"inputs": {"unet_name": models["unet"], "weight_dtype": "default"},
+                      "class_type": "UNETLoader"},
+                "2": {"inputs": {"clip_name": models["clip"], "type": models["clip_type"]},
+                      "class_type": "CLIPLoader"},
+                "4": {"inputs": {"vae_name": models["vae"]}, "class_type": "VAELoader"},
+                "6": {"inputs": {"text": prompt_text, "clip": ["2", 0]}, "class_type": "CLIPTextEncode"},
+                "7": {"inputs": {"text": self.negative_prompt, "clip": ["2", 0]}, "class_type": "CLIPTextEncode"},
+                "5": {"inputs": {"width": vid_w, "height": vid_h, "length": length, "batch_size": 1},
+                      "class_type": "EmptyLTXVLatentVideo"},
+                "10": {"inputs": {"positive": ["6", 0], "negative": ["7", 0], "frame_rate": fps},
+                       "class_type": "LTXVConditioning"},
+                "11": {"inputs": {"model": ["1", 0], "max_shift": 2.05, "base_shift": 0.95},
+                       "class_type": "ModelSamplingLTXV"},
                 "3": {
                     "inputs": {
-                        "seed": seed, "steps": 25, "cfg": 6.0, "sampler_name": "euler",
-                        "scheduler": "normal", "denoise": 1, "model": ["4", 0],
-                        "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]
+                        "seed": seed, "steps": int(self.config.get("video_steps", 8)),
+                        "cfg": float(self.config.get("video_cfg", 1.0)),
+                        "sampler_name": "euler", "scheduler": "simple", "denoise": 1,
+                        "model": ["11", 0], "positive": ["10", 0], "negative": ["10", 1],
+                        "latent_image": ["5", 0],
                     },
-                    "class_type": "KSampler"
+                    "class_type": "KSampler",
                 },
-                "4": {"inputs": {"ckpt_name": self.active_checkpoint}, "class_type": "CheckpointLoaderSimple"},
-                "5": {"inputs": {"width": width, "height": height, "batch_size": 16}, "class_type": "EmptyLatentImage"},
-                "6": {"inputs": {"text": prompt_text, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
-                "7": {"inputs": {"text": self.negative_prompt, "clip": ["4", 1]}, "class_type": "CLIPTextEncode"},
-                "8": {"inputs": {"samples": ["3", 0], "vae": ["4", 2]}, "class_type": "VAEDecode"},
-                "9": {"inputs": {"filename_prefix": "SocialMediaMonster_Video", "images": ["8", 0]}, "class_type": "SaveImage"}
+                "8": {"inputs": {"samples": ["3", 0], "vae": ["4", 0]}, "class_type": "VAEDecode"},
+                "12": {"inputs": {"images": ["8", 0], "fps": fps}, "class_type": "CreateVideo"},
+                "9": {"inputs": {"video": ["12", 0], "filename_prefix": "SocialMonster_Video",
+                                 "format": "mp4", "codec": "h264"},
+                      "class_type": "SaveVideo"},
             }
+
             body = json.dumps({"prompt": workflow}).encode('utf-8')
-            req = urllib.request.Request(f"http://{self.server_address}/prompt", data=body, headers={'Content-Type': 'application/json'})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                if resp.status == 200:
-                    data = json.loads(resp.read().decode('utf-8'))
-                    if data.get("prompt_id"):
-                        log_event("VisualAgent", f"Queued local ComfyUI video job #{data.get('prompt_id')}")
-                        return True
+            req = urllib.request.Request(f"http://{self.server_address}/prompt", data=body,
+                                         headers={'Content-Type': 'application/json'})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                if resp.status != 200:
+                    return False
+                payload = json.loads(resp.read().decode('utf-8'))
+
+            prompt_id = payload.get("prompt_id")
+            if not prompt_id:
+                log_event("VisualAgent", f"ComfyUI rejected the LTX workflow: {str(payload)[:200]}", level="WARNING")
+                return False
+
+            log_event("VisualAgent",
+                      f"Dispatched LTX video job #{prompt_id[:8]} ({vid_w}x{vid_h}, {length} frames @ {fps}fps, "
+                      f"model '{models['unet']}')")
+
+            # Video renders take far longer than stills, so allow a bigger budget.
+            attempts = int(self.config.get("video_poll_attempts", 300))
+            return self._await_comfy_output(prompt_id, save_path, attempts=attempts, node_ids=("9", "12", "8"))
+
         except Exception as e:
             log_event("VisualAgent", f"Local ComfyUI video dispatch failed: {e}", level="WARNING")
+        return False
+
+    @staticmethod
+    def _comfy_error_reason(status: dict) -> str:
+        """Pulls the node type and exception text out of a failed ComfyUI run."""
+        for message in reversed(status.get("messages", []) or []):
+            try:
+                name, payload = message[0], message[1]
+            except (IndexError, TypeError):
+                continue
+            if name == "execution_error" and isinstance(payload, dict):
+                node = payload.get("node_type", "?")
+                detail = (payload.get("exception_message") or "").splitlines()
+                return f"{node}: {detail[0] if detail else 'unknown error'}"
+        return "unknown error"
+
+    def _await_comfy_output(self, prompt_id: str, save_path: str, attempts: int = 60,
+                            node_ids: tuple = ("9",)) -> bool:
+        """Polls history and downloads the produced file. Returns False unless it lands."""
+        last_position = None
+        for attempt in range(attempts):
+            time.sleep(self.comfy_poll_interval)
+            try:
+                h_req = urllib.request.Request(f"http://{self.server_address}/history/{prompt_id}")
+                with urllib.request.urlopen(h_req, timeout=10) as h_resp:
+                    if h_resp.status != 200:
+                        continue
+                    h_data = json.loads(h_resp.read().decode('utf-8'))
+
+                if prompt_id not in h_data:
+                    if attempt % 15 == 0:
+                        position = self._queue_position(prompt_id)
+                        if position is not None and position != last_position:
+                            last_position = position
+                            log_event("VisualAgent", f"ComfyUI busy - job #{prompt_id[:8]} queued behind {position} job(s).")
+                    continue
+
+                # A failed graph never produces output. Without this the poller waited out
+                # the entire budget on a job that had already errored within a second.
+                status = h_data[prompt_id].get("status", {})
+                if status.get("status_str") == "error":
+                    reason = self._comfy_error_reason(status)
+                    log_event("VisualAgent", f"ComfyUI job #{prompt_id[:8]} failed: {reason}", level="ERROR")
+                    return False
+
+                outputs = h_data[prompt_id].get("outputs", {})
+                entry = None
+                for node_id in node_ids:
+                    node_out = outputs.get(node_id, {})
+                    for key in ("images", "gifs", "videos", "video"):
+                        items = node_out.get(key)
+                        if items:
+                            entry = items[0] if isinstance(items, list) else items
+                            break
+                    if entry:
+                        break
+                if not entry or not isinstance(entry, dict):
+                    continue
+
+                fname = entry.get("filename")
+                if not fname:
+                    continue
+                params = {"filename": fname, "subfolder": entry.get("subfolder", ""),
+                          "type": entry.get("type", "output")}
+                v_url = f"http://{self.server_address}/view?" + urllib.parse.urlencode(params)
+                with urllib.request.urlopen(v_url, timeout=120) as img_resp:
+                    raw = img_resp.read()
+                if not raw:
+                    continue
+                with open(save_path, "wb") as f_out:
+                    f_out.write(raw)
+                log_event("VisualAgent", f"Retrieved ComfyUI output: {fname}", level="SUCCESS")
+                return True
+            except Exception:
+                continue
+
+        waited = int(attempts * self.comfy_poll_interval)
+        log_event("VisualAgent", f"ComfyUI job #{prompt_id[:8]} did not return a file within {waited}s.", level="WARNING")
         return False
 
     def _dispatch_stability_video(self, prompt_text: str, save_path: str, width: int = 720, height: int = 1280) -> bool:
@@ -472,6 +722,13 @@ class VisualAgent:
         return generated_videos
 
     def _run_image_pipeline(self) -> int:
+        """
+        One master image per STORY, reused by every draft of that story.
+
+        This used to iterate drafts, so a story published to 10 channels was rendered 10
+        separate times - ten times the GPU cost, and a different picture on every network
+        for the same article.
+        """
         max_per_cycle = int(self.config.get("max_images_per_cycle", 5))
 
         with Session(engine) as session:
@@ -485,21 +742,125 @@ class VisualAgent:
             if not drafts_needing_images:
                 return 0
 
-            batch = drafts_needing_images[:max_per_cycle]
-            skipped = len(drafts_needing_images) - len(batch)
+            story_ids = list(dict.fromkeys(
+                d.verified_news_id for d in drafts_needing_images if d.verified_news_id
+            ))
+            batch_story_ids = story_ids[:max_per_cycle]
+            deferred = len(story_ids) - len(batch_story_ids)
             log_event(
                 "VisualAgent",
-                f"Generating visuals for {len(batch)} of {len(drafts_needing_images)} pending drafts"
-                + (f" ({skipped} deferred to the next cycle)." if skipped else "."),
+                f"Rendering 1 master image for each of {len(batch_story_ids)} story(ies) "
+                f"covering {len(drafts_needing_images)} pending drafts"
+                + (f"; {deferred} story(ies) deferred to the next cycle." if deferred else "."),
             )
-            draft_ids = [d.id for d in batch]
 
         generated_count = 0
-        for draft_id in draft_ids:
-            if self.generate_single_test_image(draft_id):
+        for story_id in batch_story_ids:
+            if self.generate_master_image_for_story(story_id):
                 generated_count += 1
 
         return generated_count
+
+    def generate_master_image_for_story(self, verified_news_id: int, force: bool = False) -> str:
+        """
+        Renders a single image for a story and attaches it to every draft of that story.
+        Returns the output path, or "" when nothing usable was produced.
+        """
+        provider = self.get_active_image_provider()
+
+        with Session(engine) as session:
+            story = session.get(VerifiedNews, verified_news_id)
+            if not story:
+                return ""
+            drafts = session.exec(
+                select(PostDraft).where(PostDraft.verified_news_id == verified_news_id)
+            ).all()
+            if not drafts:
+                return ""
+
+            headline = story.headline or ""
+            reference_content = (drafts[0].content or "")[:1200]
+            existing_prompt = story.master_image_prompt
+            existing_path = story.master_image_path
+
+        image_filename = f"master_story_{verified_news_id}.png"
+        output_path = os.path.join(self.output_dir, image_filename)
+
+        # Reuse an already-rendered master unless a re-render was explicitly requested.
+        if not force and existing_path and os.path.exists(os.path.join(self.output_dir, existing_path)):
+            self._attach_image_to_story(verified_news_id, existing_path, existing_prompt)
+            log_event("VisualAgent", f"Reused existing master image for Story #{verified_news_id}.")
+            return os.path.join(self.output_dir, existing_path)
+
+        # A 16:9 master crops acceptably to every channel's aspect ratio.
+        aspect_ratio = "16:9"
+        width, height = ASPECT_DIMENSIONS.get(aspect_ratio, (1024, 1024))
+
+        prompt = existing_prompt if self._is_usable_prompt(existing_prompt) else None
+        if not prompt:
+            prompt = self._build_vivid_comfy_prompt(headline, reference_content, aspect_ratio)
+
+        log_event(
+            "VisualAgent",
+            f"Generating 1 master image for Story #{verified_news_id} "
+            f"('{headline[:45]}...') via [{provider.upper()}] for {len(drafts)} drafts...",
+        )
+
+        success = False
+        if provider == "stability_ai":
+            success = self._dispatch_stability_ai(prompt, output_path, width, height)
+        elif provider == "comfy_org":
+            success = self._dispatch_comfy_org(prompt, output_path, width, height)
+        elif provider == "comfyui_local":
+            if os.environ.get("SKIP_LOCAL_COMFYUI") == "1":
+                success = False
+            else:
+                self.active_checkpoint = self._auto_detect_comfyui_checkpoint()
+                success = self._dispatch_comfyui_prompt(prompt, output_path, width, height)
+
+        if not success or provider == "ideogram_card":
+            try:
+                self._render_vibrant_article_card(headline, reference_content, "wordpress", output_path)
+                success = os.path.exists(output_path)
+            except Exception as e:
+                log_event("VisualAgent", f"Editorial card fallback failed for Story #{verified_news_id}: {e}", level="ERROR")
+                success = False
+
+        if success and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            self._attach_image_to_story(verified_news_id, image_filename, prompt)
+            log_event(
+                "VisualAgent",
+                f"Attached single master image '{image_filename}' to all {len(drafts)} posts "
+                f"for Story #{verified_news_id}",
+                level="SUCCESS",
+            )
+            return output_path
+
+        log_event("VisualAgent", f"Master image generation produced no file for Story #{verified_news_id}", level="ERROR")
+        return ""
+
+    @staticmethod
+    def _attach_image_to_story(verified_news_id: int, image_filename: str, prompt: str):
+        with Session(engine) as session:
+            story = session.get(VerifiedNews, verified_news_id)
+            if story:
+                story.master_image_path = image_filename
+                story.master_image_prompt = prompt
+                session.add(story)
+
+            drafts = session.exec(
+                select(PostDraft).where(PostDraft.verified_news_id == verified_news_id)
+            ).all()
+            for d in drafts:
+                # Leave video drafts alone; they carry their own master video.
+                if d.media_type == "video":
+                    continue
+                d.image_path = image_filename
+                d.media_path = image_filename
+                d.media_type = "image"
+                d.image_prompt = prompt
+                session.add(d)
+            session.commit()
 
     @staticmethod
     def _extract_subject_terms(headline: str, content: str, limit: int = 6) -> list:
@@ -574,12 +935,18 @@ class VisualAgent:
             "4:5": "tall vertical composition, single subject framed by foreground detail",
         }.get(aspect_ratio, "single centered composition with one clear focal point")
 
+        # Moment, vantage and palette vary per story so two articles sharing a concept
+        # ("hardware", "regulation") do not render as the same picture.
+        moment = brief.get("moment", "")
+        vantage = brief.get("vantage", "")
+        palette = brief.get("palette", "deep indigo shadows with cyan rim light and warm amber highlights")
+
         return (
-            f"A single cohesive 16-bit SNES-era RPG scene, one illustration: {brief['scene']}. "
-            f"Foreground details: {brief['props']}. {actors} "
-            f"{composition}, dramatic key lighting, hand-dithered shading, limited retro "
-            f"palette of deep indigo, cyan rim light and warm amber highlights, volumetric "
-            f"haze, subtle CRT scanline grain, detailed pixel artwork."
+            f"A single cohesive 16-bit SNES-era RPG scene, one illustration: {brief['scene']}, "
+            f"{moment}. Foreground details: {brief['props']}. {actors} "
+            f"{vantage}, {composition}, dramatic key lighting, hand-dithered shading, "
+            f"limited retro palette of {palette}, volumetric haze, subtle CRT scanline grain, "
+            f"detailed pixel artwork."
         ).replace("  ", " ")
 
     @staticmethod
@@ -698,6 +1065,86 @@ class VisualAgent:
                 return VisualAgent._extract_cloud_image_bytes(first)
         return b""
 
+    def _resolve_model_files(self) -> dict:
+        """
+        Finds the UNET/CLIP/VAE trio for a diffusion-transformer image model.
+
+        Modern models such as Z-Image ship the transformer alone: loading them through
+        CheckpointLoaderSimple fails with "clip input is invalid: None" because there is
+        no text encoder inside the file. They need UNETLoader + CLIPLoader + VAELoader.
+        """
+        cfg = self.config
+        wanted = {
+            "unet": cfg.get("image_unet", ""),
+            "clip": cfg.get("image_clip", ""),
+            "clip_type": cfg.get("image_clip_type", ""),
+            "vae": cfg.get("image_vae", ""),
+        }
+        if all(wanted[k] for k in ("unet", "clip", "clip_type", "vae")):
+            return wanted
+
+        try:
+            req = urllib.request.Request(f"http://{self.server_address}/object_info",
+                                         headers={'User-Agent': 'SocialMediaMonster/1.0'})
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                info = json.loads(resp.read().decode('utf-8'))
+        except Exception:
+            return {}
+
+        def options(node, field):
+            try:
+                value = info[node]["input"]["required"][field][0]
+                return value if isinstance(value, list) else []
+            except Exception:
+                return []
+
+        unets, clips, vaes = options("UNETLoader", "unet_name"), options("CLIPLoader", "clip_name"), options("VAELoader", "vae_name")
+
+        def first(candidates, pool):
+            # Exact filename wins before any substring match: "ae.safetensors" is a
+            # substring of "ace_1.5_vae.safetensors", which loaded the wrong VAE and
+            # failed inside VAEDecode.
+            for c in candidates:
+                for name in pool:
+                    if c.lower() == name.lower():
+                        return name
+            for c in candidates:
+                for name in pool:
+                    if c in name.lower():
+                        return name
+            return ""
+
+        # Z-Image: Qwen3 text encoder read with the lumina2 tokenizer, Flux-style VAE.
+        unet = wanted["unet"] or first(["z_image_turbo_bf16", "z_image_turbo", "z_image"], unets)
+        if not unet:
+            return {}
+        clip = wanted["clip"] or first(["qwen_3_4b.safetensors", "qwen_3_4b", "qwen3.5_2b"], clips)
+        vae = wanted["vae"] or first(["ae.safetensors"], vaes)
+        if not (clip and vae):
+            return {}
+        return {"unet": unet, "clip": clip, "clip_type": wanted["clip_type"] or "lumina2", "vae": vae}
+
+    def _sampler_settings(self) -> dict:
+        """
+        Sampler parameters matched to the checkpoint family.
+
+        Turbo/Lightning/distilled models are trained for very few steps at CFG ~1.
+        Running z-image Turbo at the SDXL defaults of 20 steps / CFG 7 burns time and
+        produces washed-out, over-cooked output.
+        """
+        name = (self.active_checkpoint or "").lower()
+        overrides = self.config.get("sampler", {}) or {}
+
+        if any(tag in name for tag in ("turbo", "lightning", "lcm", "distill", "hyper")):
+            settings = {"steps": 8, "cfg": 1.5, "sampler_name": "euler", "scheduler": "simple"}
+        elif "flux" in name:
+            settings = {"steps": 20, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple"}
+        else:
+            settings = {"steps": 25, "cfg": 7.0, "sampler_name": "dpmpp_2m", "scheduler": "karras"}
+
+        settings.update({k: v for k, v in overrides.items() if k in settings})
+        return settings
+
     def _fit_resolution(self, width: int, height: int) -> tuple:
         """
         Keeps the request inside the checkpoint's native range.
@@ -731,11 +1178,19 @@ class VisualAgent:
             # Vary the seed per prompt so re-rendering a different story cannot return a
             # cached identical image from a fixed seed.
             seed = int(hashlib.sha256(prompt_text.encode('utf-8')).hexdigest()[:12], 16) % 2_147_483_647
+
+            trio = self._resolve_model_files()
+            if trio:
+                return self._dispatch_comfyui_dit(prompt_text, save_path, width, height, seed, trio)
+
+            sampler = self._sampler_settings()
             workflow = {
                 "3": {
                     "inputs": {
-                        "seed": seed, "steps": 20, "cfg": 7.0, "sampler_name": "euler",
-                        "scheduler": "normal", "denoise": 1, "model": ["4", 0],
+                        "seed": seed,
+                        "steps": sampler["steps"], "cfg": sampler["cfg"],
+                        "sampler_name": sampler["sampler_name"], "scheduler": sampler["scheduler"],
+                        "denoise": 1, "model": ["4", 0],
                         "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["5", 0]
                     },
                     "class_type": "KSampler"

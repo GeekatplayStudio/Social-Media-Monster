@@ -30,6 +30,26 @@ comfyui:
                                # Blank auto-detects, preferring SDXL/Flux over SD 1.5.
   negative_prompt: ""          # Blank uses the built-in anti sprite-sheet negative
 
+  # Image model. Blank auto-detects; Z-Image is a bare transformer so it needs the
+  # UNET + text encoder + VAE trio rather than a single checkpoint file.
+  image_unet: ""               # e.g. "z_image_turbo_bf16.safetensors"
+  image_clip: ""               # e.g. "qwen_3_4b.safetensors"
+  image_clip_type: ""          # e.g. "lumina2"
+  image_vae: ""                # e.g. "ae.safetensors"
+  image_steps: 8               # Z-Image Turbo is trained for very few steps
+  image_cfg: 1.5
+
+  # Video model (LTX). Same three-part loading; a checkpoint loader cannot load LTX 2.5.
+  video_unet: ""               # e.g. "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"
+  video_clip: ""               # e.g. "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors"
+  video_clip_type: "ltxv"
+  video_vae: ""                # e.g. "ltx-2.5-video-vae-bf16.safetensors"
+  video_steps: 8
+  video_cfg: 1.0
+  video_fps: 24
+  video_seconds: 4
+  video_poll_attempts: 300     # 300 x 2s = 10 minutes for a video render
+
 # Tavily Research API - live news discovery + full-article fact extraction.
 # The key is normally stored encrypted via the dashboard Provider Config panel.
 # It can also be supplied here or through the TAVILY_API_KEY environment variable.

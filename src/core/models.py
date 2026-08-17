@@ -27,6 +27,11 @@ class VerifiedNews(SQLModel, table=True):
     key_takeaways: str  # JSON string or bullet points
     created_at: datetime = Field(default_factory=datetime.now)
     status: str = "verified" # verified, disputed, rejected
+    # One master asset per story, reused by every platform draft. Rendering a separate
+    # image for each of the 10 channels multiplied GPU cost by 10 and gave the same story
+    # a different picture on every network.
+    master_image_path: Optional[str] = None
+    master_image_prompt: Optional[str] = None
     master_video_path: Optional[str] = None
     master_video_prompt: Optional[str] = None
 

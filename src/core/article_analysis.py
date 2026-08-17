@@ -212,6 +212,43 @@ DEFAULT_SCENE = ("a retro-futurist newsroom hall lined with glowing broadcast mo
                  "relaying an unfolding story")
 DEFAULT_PROPS = "broadcast monitors, ticker banners, dispatch desk"
 
+# Two stories on the same subject share a concept, which alone produced the identical
+# scene description and near-identical artwork. These axes vary the staging per story so
+# related articles stay on-concept without repeating each other.
+NARRATIVE_MOMENTS = [
+    "at the tense moment the process begins",
+    "mid-action, with figures reacting to what is unfolding",
+    "in the quiet aftermath, the space emptied and cooling",
+    "at peak activity, crowded and urgent",
+    "just before dawn, with a single figure preparing the work",
+    "during a sudden interruption, alarms and attention converging",
+]
+
+CAMERA_VANTAGES = [
+    "viewed from a low heroic angle",
+    "seen from a high gantry looking down",
+    "framed through a doorway in the foreground",
+    "a close three-quarter view of the central subject",
+    "a wide symmetrical head-on composition",
+    "an off-centre view with deep receding perspective",
+]
+
+PALETTE_KEYS = [
+    "deep indigo shadows with cyan rim light and warm amber highlights",
+    "cold teal shadows against molten orange key light",
+    "violet and magenta dusk tones with pale gold accents",
+    "slate blue midtones with emerald signal glow",
+    "warm sepia base with icy blue practical lights",
+]
+
+
+def _stable_index(text: str, modulus: int) -> int:
+    """Deterministic per-story selection: same story always renders the same way."""
+    digest = 0
+    for ch in (text or "untitled"):
+        digest = (digest * 131 + ord(ch)) & 0xFFFFFFFF
+    return digest % max(modulus, 1)
+
 
 # ---------------------------------------------------------------- cleaning
 def clean_body(text: str) -> str:
@@ -527,6 +564,13 @@ def build_visual_brief(title: str, body: str) -> dict:
     subject = entities[0] if entities else ""
     supporting = ", ".join(entities[1:3])
 
+    # Vary staging by story, not by concept, so two articles on the same subject do not
+    # render the same picture. Seeded from the headline, so a given story is stable.
+    key = f"{title}|{subject}"
+    moment = NARRATIVE_MOMENTS[_stable_index(key, len(NARRATIVE_MOMENTS))]
+    vantage = CAMERA_VANTAGES[_stable_index(key + "v", len(CAMERA_VANTAGES))]
+    palette = PALETTE_KEYS[_stable_index(key + "p", len(PALETTE_KEYS))]
+
     return {
         "concept": concept["name"],
         "scene": concept["scene"],
@@ -535,4 +579,9 @@ def build_visual_brief(title: str, body: str) -> dict:
         "supporting": supporting,
         "summary": analysis["summary"],
         "entities": entities,
+        "moment": moment,
+        "vantage": vantage,
+        "palette": palette,
+        # Distinct focus term keeps the prompt anchored to THIS article's specifics.
+        "focus": ", ".join(entities[:3]) or (analysis["summary"][:60] if analysis["summary"] else ""),
     }

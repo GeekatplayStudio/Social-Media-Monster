@@ -2,6 +2,7 @@ import os
 import sys
 import yaml
 import json
+from sqlalchemy import event
 from sqlmodel import SQLModel, create_engine, Session, select
 from src.core.models import PersonaProfile, SystemLog, SystemSetting
 
@@ -18,7 +19,35 @@ db_path = config.get("database", {}).get("sqlite_path", "data/social_monster.db"
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
 sqlite_url = f"sqlite:///{db_path}"
-engine = create_engine(sqlite_url, connect_args={"check_same_thread": False})
+
+# The web server, the agent pipeline and log_event all hold their own connections, and
+# agents legitimately write (log lines) while an outer session is mid-transaction. Under
+# SQLite's default rollback journal that combination raises "database is locked", so the
+# engine is configured for concurrent access:
+#   - timeout      : wait for a busy lock instead of failing instantly
+#   - WAL          : one writer concurrent with many readers
+#   - busy_timeout : same wait applied inside SQLite itself
+engine = create_engine(
+    sqlite_url,
+    connect_args={"check_same_thread": False, "timeout": 30},
+)
+
+
+@event.listens_for(engine, "connect")
+def _configure_sqlite_connection(dbapi_connection, _connection_record):
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        # Foreign keys are deliberately left at SQLite's default (off). The schema
+        # declares them, but existing rows and the cleanup order used across the code
+        # do not satisfy them; enabling enforcement here would be a separate migration.
+    except Exception:
+        # A read-only or exotic filesystem may refuse WAL; the app still works without it.
+        pass
+    finally:
+        cursor.close()
 
 def init_db():
     SQLModel.metadata.create_all(engine)
@@ -28,6 +57,14 @@ def init_db():
 def migrate_columns():
     from sqlalchemy import text
     with engine.connect() as conn:
+        try:
+            conn.execute(text("ALTER TABLE verifiednews ADD COLUMN master_image_path VARCHAR"))
+        except Exception:
+            pass
+        try:
+            conn.execute(text("ALTER TABLE verifiednews ADD COLUMN master_image_prompt VARCHAR"))
+        except Exception:
+            pass
         try:
             conn.execute(text("ALTER TABLE verifiednews ADD COLUMN master_video_path VARCHAR"))
         except Exception:
@@ -113,6 +150,20 @@ def seed_defaults():
             session.add(SystemSetting(key_name="sample_writing_article", value=""))
 
         session.commit()
+
+    # Seed autoagent website platform credentials by default if not set
+    try:
+        from src.core.platforms import PlatformCredentialStore
+        store = PlatformCredentialStore()
+        if not store.is_configured("autoagent"):
+            default_key = os.environ.get("API_SECRET_KEY", "autoagent_secret_key_123")
+            store.save_credentials("autoagent", {
+                "base_url": "https://www.vladimirchopine.com/ai-news/api",
+                "secret_key": default_key
+            })
+            store.set_enabled("autoagent", True)
+    except Exception as e:
+        log_event("DBInit", f"Notice initializing autoagent platform defaults: {e}", level="WARNING")
 
 def log_event(agent_name: str, message: str, level: str = "INFO", details: str = None):
     with Session(engine) as session:

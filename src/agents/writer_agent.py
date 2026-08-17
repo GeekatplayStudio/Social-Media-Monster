@@ -7,7 +7,7 @@ from src.agents.research_agent import ResearchAgent
 from src.agents.verifier_agent import VerifierAgent
 from src.agents.humanizer_agent import HumanizerAgent
 
-ALL_PLATFORMS = ["twitter", "instagram", "facebook", "youtube", "telegram", "linkedin", "reddit", "discord", "wordpress"]
+ALL_PLATFORMS = ["twitter", "instagram", "facebook", "youtube", "telegram", "linkedin", "reddit", "discord", "wordpress", "autoagent"]
 
 # Channel-native briefs. Without these every platform received an identical instruction
 # and the model had no reason to produce anything but the same post nine times.
@@ -21,6 +21,7 @@ PLATFORM_BRIEFS = {
     "reddit": "Technical breakdown for a dev subreddit. Markdown headers, real detail, no marketing tone, no hashtags, end with a genuine discussion question.",
     "discord": "Announcement. Bold title, short blockquote bullets, casual and direct, no hashtags.",
     "wordpress": "Full blog article, 500-800 words, markdown H2 subheadings, an intro, analysis with specifics, and a conclusion.",
+    "autoagent": "Technical blog article for AutoAgent. Clean HTML formatting, bold section headers, intro summary, code block placeholders if code present, crisp conclusion.",
 }
 
 class WriterAgent:
@@ -56,6 +57,10 @@ class WriterAgent:
         log_event("WriterAgent", "Generating platform posts with Fine-Tune Equalizer & Voice Sample...")
         generated_count = 0
 
+        # Phase 1 - read what is needed, then release the connection.
+        # Generation calls the model and writes log lines through their own connections.
+        # Holding an open write transaction across that work made SQLite report
+        # "database is locked", because the logger could never acquire the write lock.
         with Session(engine) as session:
             verified_items = session.exec(
                 select(VerifiedNews).where(VerifiedNews.status == "verified")
@@ -67,19 +72,48 @@ class WriterAgent:
 
             max_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "max_articles_per_cycle")).first()
             max_posts = int(max_setting.value) if max_setting and max_setting.value else 2
-            
-            selected_items = verified_items[:max_posts]
 
+            # Detached copies so attributes stay readable once the session is closed.
+            selected_items = [
+                VerifiedNews(
+                    id=item.id, trend_id=item.trend_id, headline=item.headline,
+                    verified_facts=item.verified_facts, key_takeaways=item.key_takeaways,
+                )
+                for item in verified_items[:max_posts]
+            ]
+
+            already_drafted = {
+                (d.verified_news_id, d.platform)
+                for d in session.exec(
+                    select(PostDraft).where(
+                        PostDraft.verified_news_id.in_([i.id for i in selected_items])
+                    )
+                ).all()
+            }
+
+        # Phase 2 - generate with no session held open.
+        pending_drafts = []
+        for item in selected_items:
+            for platform in ALL_PLATFORMS:
+                if (item.id, platform) in already_drafted:
+                    continue
+                pending_drafts.append(
+                    self._generate_draft_for_platform(item, platform, target_persona_key, eq, sample_article)
+                )
+                generated_count += 1
+
+        # Phase 3 - persist in one short transaction.
+        with Session(engine) as session:
+            for draft in pending_drafts:
+                session.add(draft)
+
+            # Mark each story as written. Without this the same verified news is
+            # re-drafted on every cycle, multiplying identical posts indefinitely.
             for item in selected_items:
-                for platform in ALL_PLATFORMS:
-                    draft = self._generate_draft_for_platform(item, platform, target_persona_key, eq, sample_article)
-                    session.add(draft)
-                    generated_count += 1
-
-                # Mark the story as written. Without this the same verified news is
-                # re-drafted on every cycle, multiplying identical posts indefinitely.
-                item.status = "drafted"
-                session.add(item)
+                stored = session.get(VerifiedNews, item.id)
+                if stored:
+                    stored.status = "drafted"
+                    session.add(stored)
 
             session.commit()
 
