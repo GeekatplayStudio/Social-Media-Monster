@@ -35,7 +35,11 @@ class SecurityManager:
         master_key pins the key explicitly instead of reading it from the environment or
         key file. Key rotation needs this so old and new keys can be held side by side.
         """
-        self.secret_file = secret_file or os.environ.get("SMM_SECRET_FILE", ".env.secret")
+        default_secret = os.path.join(
+            os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")), ".env.secret")
+        # Project-anchored: resolving this against the shell's directory would generate a
+        # brand new master key and make every stored credential undecryptable.
+        self.secret_file = secret_file or os.environ.get("SMM_SECRET_FILE", default_secret)
         if master_key:
             self.master_key = master_key.encode("utf-8") if isinstance(master_key, str) else master_key
         else:

@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import Session, select, desc
-from src.core.db import engine, init_db, log_event, load_config, DEFAULT_EQUALIZER
+from src.core.db import engine, init_db, log_event, load_config, DEFAULT_EQUALIZER, PROJECT_ROOT
 from src.core.models import PostDraft, PersonaProfile, SystemLog, SystemSetting
 from src.core.security import SecurityManager
 from src.core.llm_client import _CIRCUIT
@@ -16,18 +16,31 @@ from src.core.channel_clients import test_channel
 from src.agents.super_agent import SuperAgent
 from src.mcp.server import SocialMediaMonsterMCP
 
+from src.core.scheduler import scheduler_service
+
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "templates/index.html")
+
+super_agent = SuperAgent()
+mcp_server = SocialMediaMonsterMCP(super_agent)
+security = SecurityManager()
+platform_store = PlatformCredentialStore()
+
+scheduler_service.set_super_agent(super_agent)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    scheduler_service.start()
     yield
+    scheduler_service.stop()
 
 app = FastAPI(title="SocialMediaMonster Control Dashboard & MCP Server", lifespan=lifespan)
 
-images_dir = "data/outputs/images"
-videos_dir = "data/outputs/videos"
-avatars_dir = "data/outputs/avatars"
+# Anchored to the project so the server serves the same folders the agents write to,
+# regardless of which directory it was launched from.
+images_dir = os.path.join(PROJECT_ROOT, "data", "outputs", "images")
+videos_dir = os.path.join(PROJECT_ROOT, "data", "outputs", "videos")
+avatars_dir = os.path.join(PROJECT_ROOT, "data", "outputs", "avatars")
 os.makedirs(images_dir, exist_ok=True)
 os.makedirs(videos_dir, exist_ok=True)
 os.makedirs(avatars_dir, exist_ok=True)
@@ -35,11 +48,6 @@ os.makedirs(avatars_dir, exist_ok=True)
 app.mount("/static/images", StaticFiles(directory=images_dir), name="images")
 app.mount("/static/videos", StaticFiles(directory=videos_dir), name="videos")
 app.mount("/static/avatars", StaticFiles(directory=avatars_dir), name="avatars")
-
-super_agent = SuperAgent()
-mcp_server = SocialMediaMonsterMCP(super_agent)
-security = SecurityManager()
-platform_store = PlatformCredentialStore()
 
 def is_remote_auth_required() -> bool:
     with Session(engine) as session:
@@ -346,18 +354,29 @@ def get_schedule():
         h_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "schedule_interval_hours")).first()
         m_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "max_articles_per_cycle")).first()
         c_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "comfyui_enabled")).first()
+        sched_status = scheduler_service.get_status()
         return {
             "hours": h_setting.value if h_setting else "6",
+            "minutes": str(sched_status.get("interval_minutes", 360)),
+            "scheduler_active": sched_status.get("enabled", False),
             "max_posts": m_setting.value if m_setting else "2",
-            "comfyui_enabled": c_setting.value.lower() == "true" if c_setting else False
+            "comfyui_enabled": c_setting.value.lower() == "true" if c_setting else False,
+            "scheduler": sched_status
         }
 
 @app.post("/api/schedule")
 def save_schedule(data: dict):
     hours_str = str(data.get("hours", "6"))
+    minutes_val = data.get("minutes")
+    scheduler_active = data.get("scheduler_active", True)
     max_posts_str = str(data.get("max_posts", "2"))
     comfy_enabled_str = str(data.get("comfyui_enabled", "false"))
     
+    interval_mins = float(minutes_val) if minutes_val is not None else float(hours_str) * 60.0
+
+    # Update scheduler service
+    scheduler_service.update_schedule(enabled=scheduler_active, interval_minutes=interval_mins)
+
     with Session(engine) as session:
         h_setting = session.exec(select(SystemSetting).where(SystemSetting.key_name == "schedule_interval_hours")).first()
         if not h_setting:
@@ -381,8 +400,32 @@ def save_schedule(data: dict):
         session.add(c_setting)
 
         session.commit()
-        log_event("WebDashboard", f"Updated settings: Every {hours_str} hours, Max {max_posts_str} posts per run, Bulk Images: {comfy_enabled_str.upper()}")
-    return {"status": "schedule_saved", "hours": hours_str, "max_posts": max_posts_str, "comfyui_enabled": comfy_enabled_str}
+        log_event("WebDashboard", f"Updated schedule settings: Every {interval_mins} mins (Active: {scheduler_active}), Max {max_posts_str} posts per run")
+
+    return {
+        "status": "schedule_saved",
+        "hours": hours_str,
+        "minutes": interval_mins,
+        "scheduler_active": scheduler_active,
+        "max_posts": max_posts_str,
+        "comfyui_enabled": comfy_enabled_str
+    }
+
+@app.get("/api/scheduler")
+def get_scheduler_status():
+    return scheduler_service.get_status()
+
+@app.post("/api/scheduler")
+def update_scheduler_config(data: dict):
+    enabled = data.get("enabled")
+    interval_minutes = data.get("interval_minutes")
+    interval_hours = data.get("interval_hours")
+    status = scheduler_service.update_schedule(
+        enabled=enabled,
+        interval_minutes=interval_minutes,
+        interval_hours=interval_hours
+    )
+    return status
 
 @app.post("/api/posts/{post_id}/generate-image")
 def generate_single_test_image(post_id: int):

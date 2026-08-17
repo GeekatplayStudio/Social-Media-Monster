@@ -31,8 +31,13 @@ param(
     [int]$Port = 8000,
     [string]$BindHost = '127.0.0.1',
     [switch]$Foreground,
-    [switch]$SkipBuild
+    [switch]$SkipBuild,
+    [switch]$Restart
 )
+
+# Whether -Port was typed explicitly. If it was, a busy port is an error; if it was just
+# the default, the script quietly moves to a free one instead of dead-ending.
+$PortWasExplicit = $PSBoundParameters.ContainsKey('Port')
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -46,12 +51,19 @@ function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 
+# Commands printed in hints must work from wherever the user actually is. Running from
+# inside scripts\ and being told to type ".\scripts\stop.ps1" is a dead end.
+$InvokeDir = if ((Get-Location).Path -ieq $PSScriptRoot) { '.' } else { '.\scripts' }
+function Cmd($name) { "$InvokeDir\$name" }
+
 Write-Host ""
 Write-Host "=================================================================" -ForegroundColor Magenta
 Write-Host " SOCIAL MEDIA MONSTER - START" -ForegroundColor Magenta
 Write-Host "=================================================================" -ForegroundColor Magenta
 
-Set-Location $ProjectRoot
+# Deliberately NOT Set-Location: that changed the caller's directory, so after running
+# this once from scripts\ the next ".\start.ps1" failed with "not recognized". Every path
+# below is absolute, and child processes get -WorkingDirectory instead.
 if (-not (Test-Path $RunDir)) { New-Item -ItemType Directory -Path $RunDir | Out-Null }
 
 # --------------------------------------------------------------- Already running?
@@ -59,10 +71,20 @@ if (Test-Path $PidFile) {
     $existingPid = (Get-Content $PidFile -Raw).Trim()
     $proc = Get-Process -Id $existingPid -ErrorAction SilentlyContinue
     if ($proc) {
-        Write-Warn "Already running (PID $existingPid). Stop it first with .\scripts\stop.ps1"
-        exit 1
+        if ($Restart) {
+            Write-Step "Restarting: stopping existing instance (PID $existingPid)"
+            & (Join-Path $PSScriptRoot 'stop.ps1') | Out-Null
+            Start-Sleep -Milliseconds 800
+        } else {
+            Write-Host ""
+            Write-Warn "Already running (PID $existingPid)."
+            Write-Host "  Restart it   : $(Cmd 'start.ps1') -Restart" -ForegroundColor Yellow
+            Write-Host "  Or stop it   : $(Cmd 'stop.ps1')" -ForegroundColor Yellow
+            Write-Host ""
+            exit 1
+        }
     }
-    Remove-Item $PidFile -Force
+    Remove-Item $PidFile -Force -ErrorAction SilentlyContinue
 }
 
 # --------------------------------------------------------------- Build phase
@@ -88,7 +110,7 @@ if (-not $SkipBuild) {
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: build failed." -ForegroundColor Red; exit 1 }
     } else {
         Write-Ok "Environment up to date"
-        & $VenvPython -c "from src.core.db import init_db; init_db()"
+        & $VenvPython -c "import sys; sys.path.insert(0, r'$ProjectRoot'); from src.core.db import init_db; init_db()"
         if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: database init failed." -ForegroundColor Red; exit 1 }
         Write-Ok "Database ready"
     }
@@ -114,34 +136,44 @@ if ($inUse) {
                   ($normalized -match '\bmain\.py\b' -and $normalized -notmatch 'backend\.')
     }
 
-    Write-Host ""
-    Write-Host "ERROR: port $Port is already in use." -ForegroundColor Red
-    Write-Host "  PID     : $holderPid ($($holder.ProcessName))" -ForegroundColor Red
-    Write-Host "  Command : $holderCmd" -ForegroundColor Red
-    Write-Host ""
-
-    if ($isOurs) {
-        Write-Host "  That is another SocialMediaMonster instance. Stop it first:" -ForegroundColor Yellow
-        Write-Host "      .\scripts\stop.ps1 -Port $Port" -ForegroundColor Yellow
-    } else {
-        Write-Host "  That is a DIFFERENT application, so it was left alone." -ForegroundColor Yellow
-        # Offer a port that is actually free rather than making the user hunt for one.
-        $free = $null
-        foreach ($candidate in ($Port + 1)..($Port + 20)) {
-            if (-not (Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue)) {
-                $free = $candidate
-                break
-            }
-        }
-        if ($free) {
-            Write-Host "  Start on a free port instead:" -ForegroundColor Yellow
-            Write-Host "      .\scripts\start.ps1 -Port $free" -ForegroundColor Yellow
-        } else {
-            Write-Host "  Pick a free port with: .\scripts\start.ps1 -Port <number>" -ForegroundColor Yellow
+    # Find a port that is genuinely free.
+    $free = $null
+    foreach ($candidate in ($Port + 1)..($Port + 40)) {
+        if (-not (Get-NetTCPConnection -LocalPort $candidate -State Listen -ErrorAction SilentlyContinue)) {
+            $free = $candidate
+            break
         }
     }
-    Write-Host ""
-    exit 1
+
+    # An unrelated program on the default port should not stop the engine from starting.
+    # Only an explicitly requested port is treated as a hard requirement.
+    if (-not $isOurs -and -not $PortWasExplicit -and $free) {
+        Write-Warn "Port $Port is used by another application ($($holder.ProcessName), PID $holderPid)."
+        Write-Ok  "Starting on port $free instead. Use -Port to pin a specific one."
+        $Port = $free
+    } else {
+        Write-Host ""
+        Write-Host "ERROR: port $Port is already in use." -ForegroundColor Red
+        Write-Host "  PID     : $holderPid ($($holder.ProcessName))" -ForegroundColor Red
+        Write-Host "  Command : $holderCmd" -ForegroundColor Red
+        Write-Host ""
+
+        if ($isOurs) {
+            Write-Host "  That is another SocialMediaMonster instance:" -ForegroundColor Yellow
+            Write-Host "      $(Cmd 'start.ps1') -Restart" -ForegroundColor Yellow
+            Write-Host "      $(Cmd 'stop.ps1') -Port $Port" -ForegroundColor Yellow
+        } else {
+            Write-Host "  That is a DIFFERENT application, so it was left alone." -ForegroundColor Yellow
+            if ($free) {
+                Write-Host "  Start on a free port instead:" -ForegroundColor Yellow
+                Write-Host "      $(Cmd 'start.ps1') -Port $free" -ForegroundColor Yellow
+            } else {
+                Write-Host "  Pick a free port with: $(Cmd 'start.ps1') -Port <number>" -ForegroundColor Yellow
+            }
+        }
+        Write-Host ""
+        exit 1
+    }
 }
 
 # --------------------------------------------------------------- Launch
@@ -214,5 +246,6 @@ Write-Host ""
 Write-Host "  The engine is HIBERNATING. Open the dashboard and press" -ForegroundColor Yellow
 Write-Host "  'Execute Cycle' to run the pipeline manually." -ForegroundColor Yellow
 Write-Host ""
-Write-Host "  Stop with: .\scripts\stop.ps1"
+Write-Host "  Stop with   : $(Cmd 'stop.ps1')"
+Write-Host "  Restart with: $(Cmd 'start.ps1') -Restart"
 Write-Host ""

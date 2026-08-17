@@ -9,7 +9,7 @@ import urllib.parse
 import hashlib
 from PIL import Image, ImageDraw, ImageFont
 from sqlmodel import Session, select
-from src.core.db import engine, log_event, load_config
+from src.core.db import engine, log_event, load_config, PROJECT_ROOT
 from src.core.models import PostDraft, SystemSetting, VerifiedNews
 from src.core.llm_client import LLMClient
 from src.core.article_analysis import build_visual_brief
@@ -79,8 +79,10 @@ class VisualAgent:
     def __init__(self):
         self.config = load_config().get("comfyui", {})
         self.server_address = self.config.get("server_address", "127.0.0.1:8188")
-        self.output_dir = "data/outputs/images"
-        self.video_output_dir = "data/outputs/videos"
+        # Anchored to the project, not the shell's directory, so launching from scripts\
+        # writes artwork to the same place the dashboard serves it from.
+        self.output_dir = os.path.join(PROJECT_ROOT, "data", "outputs", "images")
+        self.video_output_dir = os.path.join(PROJECT_ROOT, "data", "outputs", "videos")
         self.llm = LLMClient()
         self.comfy_poll_attempts = int(self.config.get("poll_attempts", 60))
         self.comfy_poll_interval = float(self.config.get("poll_interval_seconds", 2))

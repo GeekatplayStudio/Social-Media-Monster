@@ -33,7 +33,8 @@ Write-Host "=================================================================" -
 Write-Host " SOCIAL MEDIA MONSTER - INSTALL" -ForegroundColor Magenta
 Write-Host "=================================================================" -ForegroundColor Magenta
 
-Set-Location $ProjectRoot
+# Not Set-Location: changing the caller's directory breaks the next ".\install.ps1" or
+# ".\start.ps1" typed from scripts\. All paths below are absolute.
 
 # --------------------------------------------------------------- 1. Python check
 Write-Step "Checking Python interpreter"
@@ -95,7 +96,7 @@ $reqHashFile = Join-Path $ProjectRoot '.venv\.requirements.sha256'
 
 # --------------------------------------------------------------- 4. Database
 Write-Step "Initializing SQLite database"
-& $VenvPython -c "from src.core.db import init_db; init_db(); print('    database ready')"
+& $VenvPython -c "import sys; sys.path.insert(0, r'$ProjectRoot'); from src.core.db import init_db; init_db(); print('    database ready')"
 if ($LASTEXITCODE -ne 0) { Write-Host "ERROR: database init failed." -ForegroundColor Red; exit 1 }
 
 # --------------------------------------------------------------- 5. Encryption key
@@ -104,7 +105,7 @@ $secretFile = Join-Path $ProjectRoot '.env.secret'
 if (Test-Path $secretFile) {
     Write-Ok "Existing .env.secret found (keep this file safe and out of git)"
 } else {
-    & $VenvPython -c "from src.core.security import SecurityManager; SecurityManager()"
+    & $VenvPython -c "import sys; sys.path.insert(0, r'$ProjectRoot'); from src.core.security import SecurityManager; SecurityManager()"
     Write-Ok "Generated a new .env.secret master key"
 }
 

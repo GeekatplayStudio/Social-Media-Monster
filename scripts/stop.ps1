@@ -33,6 +33,10 @@ function Write-Step($msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
 function Write-Ok($msg)   { Write-Host "    $msg" -ForegroundColor Green }
 function Write-Warn($msg) { Write-Host "    $msg" -ForegroundColor Yellow }
 
+# Hints must be typeable from wherever the user is standing.
+$InvokeDir = if ((Get-Location).Path -ieq $PSScriptRoot) { '.' } else { '.\scripts' }
+function Cmd($name) { "$InvokeDir\$name" }
+
 # Recognises this project's server by its command line, so an unrelated process holding
 # the same port is never mistaken for ours.
 function Test-IsOurServer($commandLine) {
@@ -96,7 +100,7 @@ if (-not $targetPid) {
             Write-Host "  Command : $cmdLine" -ForegroundColor Red
             Write-Host ""
             Write-Host "  This is not SocialMediaMonster, so it was left running." -ForegroundColor Yellow
-            Write-Host "  If you really meant to stop it: .\scripts\stop.ps1 -Port $Port -Force" -ForegroundColor Yellow
+            Write-Host "  If you really meant to stop it: $(Cmd 'stop.ps1') -Port $Port -Force" -ForegroundColor Yellow
             Write-Host ""
             exit 1
         }

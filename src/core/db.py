@@ -14,8 +14,14 @@ def load_config():
             return yaml.safe_load(f)
     return {}
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+
 config = load_config()
 db_path = config.get("database", {}).get("sqlite_path", "data/social_monster.db")
+# Anchor a relative path to the project, not to the shell's current directory. Otherwise
+# launching from scripts\ (or anywhere else) silently creates a second, empty database.
+if not os.path.isabs(db_path):
+    db_path = os.path.join(PROJECT_ROOT, db_path)
 os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
 sqlite_url = f"sqlite:///{db_path}"
