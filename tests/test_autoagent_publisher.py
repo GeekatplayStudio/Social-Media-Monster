@@ -204,3 +204,46 @@ def test_platform_credential_store_autoagent():
     decrypted = store.get_credentials("autoagent")
     assert decrypted["base_url"] == BASE_URL
     assert decrypted["secret_key"] == SECRET_KEY
+
+
+# --------------------------------------------------------------- published HTML quality
+
+def test_markdown_body_is_rendered_not_escaped():
+    """
+    The body was HTML-escaped wholesale, so a post published with a literal
+    "# Heading" and "**bold**" visible on the page.
+    """
+    html_out = AutoAgentPublisher.markdown_to_html("**Nvidia warns of tight supply.**")
+    assert "<strong>Nvidia warns of tight supply.</strong>" in html_out
+    assert "**" not in html_out
+
+
+def test_duplicate_title_heading_is_dropped():
+    title = "Nvidia signals a prolonged shortage"
+    out = AutoAgentPublisher.markdown_to_html(f"# {title}\n\nSupply stays tight.", drop_title=title)
+    assert title not in out, "the site stores the title separately; repeating it reads as duplication"
+    assert "Supply stays tight." in out
+
+
+def test_list_markers_become_real_list_items():
+    out = AutoAgentPublisher.markdown_to_html("- Memory is the bottleneck\n- Budget cards feel it first")
+    assert out.startswith("<ul>")
+    assert "<li>Memory is the bottleneck</li>" in out
+    assert "- Memory" not in out, "the bullet marker must not survive into the item text"
+
+    ordered = AutoAgentPublisher.markdown_to_html("1. First\n2. Second")
+    assert ordered.startswith("<ol>")
+
+
+def test_video_is_embedded_as_a_player_not_an_image():
+    """A generated .mp4 was emitted inside <img>, which cannot play."""
+    assert AutoAgentPublisher.media_embed("api/uploads/clip.mp4").startswith("<video")
+    assert "controls" in AutoAgentPublisher.media_embed("api/uploads/clip.mp4")
+    assert AutoAgentPublisher.media_embed("api/uploads/art.png").startswith("<img")
+
+
+def test_author_markup_cannot_be_injected():
+    out = AutoAgentPublisher.markdown_to_html('<script>alert(1)</script> and **bold**')
+    assert "<script>" not in out
+    assert "&lt;script&gt;" in out
+    assert "<strong>bold</strong>" in out

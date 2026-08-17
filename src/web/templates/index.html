@@ -530,6 +530,26 @@
     </section>
 
     <!-- Main Content & Multi-Platform Post Feed -->
+    <!-- Step-by-step guide: what the system needs, what is blocking, what to click next -->
+    <section class="max-w-7xl mx-auto px-6 pt-6">
+        <div id="guidePanel" class="bg-dark-2 border border-gray-custom rounded-2xl shadow-xl overflow-hidden">
+            <div class="flex items-center justify-between px-5 py-3 border-b border-gray-800 cursor-pointer hover:bg-dark-3 transition" onclick="toggleGuide()">
+                <div class="flex items-center gap-3 min-w-0">
+                    <span id="guideDot" class="w-2.5 h-2.5 rounded-full bg-gray-600 shrink-0"></span>
+                    <div class="min-w-0">
+                        <div class="text-sm font-bold text-gray-100">Setup &amp; Status</div>
+                        <div id="guideSummary" class="text-xs text-gray-400 truncate">Checking…</div>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2 shrink-0">
+                    <button onclick="event.stopPropagation(); loadGuide()" class="px-3 py-1.5 bg-dark-4 hover:bg-gray-700 text-gray-200 border border-gray-600 rounded-lg text-xs font-bold transition" title="Re-check">↻</button>
+                    <span id="guideCaret" class="text-gray-500 font-mono text-xs">▾</span>
+                </div>
+            </div>
+            <div id="guideBody" class="px-5 py-4 space-y-2"></div>
+        </div>
+    </section>
+
     <main class="max-w-7xl mx-auto px-6 pt-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
         <section class="lg:col-span-5 space-y-6">
             <div class="bg-dark-2 border border-gray-custom rounded-2xl p-5 shadow-xl">
@@ -914,6 +934,7 @@
             document.getElementById('modeDemoBtn').className = mode === 'demo' ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-200 text-gray-900 shadow' : 'px-3 py-1.5 rounded-lg text-xs font-bold text-gray-400';
             document.getElementById('modeProdBtn').className = mode === 'production' ? 'px-3 py-1.5 rounded-lg text-xs font-bold bg-gray-200 text-gray-900 shadow' : 'px-3 py-1.5 rounded-lg text-xs font-bold text-gray-400';
             await fetch('/api/mode', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ mode: mode }) });
+            loadGuide();
         }
 
         async function fetchLogs() {
@@ -1117,6 +1138,50 @@
                 }
             } catch (e) {
                 if (badge) { badge.innerText = 'check failed'; badge.className = 'ml-2 text-[10px] font-bold uppercase text-rose-400'; }
+            }
+        }
+
+        // ------------------------------------------------ Setup & Status guide
+        let guideOpen = true;
+
+        function toggleGuide() {
+            guideOpen = !guideOpen;
+            document.getElementById('guideBody').classList.toggle('hidden', !guideOpen);
+            document.getElementById('guideCaret').innerText = guideOpen ? '▾' : '▸';
+        }
+
+        const GUIDE_STYLE = {
+            ok:      { dot: 'bg-emerald-400', text: 'text-emerald-400', label: 'READY' },
+            warn:    { dot: 'bg-amber-400',   text: 'text-amber-400',   label: 'OPTIONAL' },
+            blocked: { dot: 'bg-rose-500',    text: 'text-rose-400',    label: 'BLOCKING' },
+        };
+
+        async function loadGuide() {
+            try {
+                const res = await fetch('/api/readiness');
+                const data = await res.json();
+
+                document.getElementById('guideSummary').innerText = data.summary;
+                document.getElementById('guideDot').className =
+                    'w-2.5 h-2.5 rounded-full shrink-0 ' + (data.blocked ? 'bg-rose-500' : 'bg-emerald-400');
+
+                document.getElementById('guideBody').innerHTML = data.steps.map(s => {
+                    const st = GUIDE_STYLE[s.state] || GUIDE_STYLE.warn;
+                    return `
+                    <div class="flex items-start gap-3 py-1.5 ${s.state === 'blocked' ? 'bg-rose-950/30 -mx-2 px-2 rounded-lg border border-rose-900/60' : ''}">
+                        <span class="mt-1 w-2 h-2 rounded-full ${st.dot} shrink-0"></span>
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-2 flex-wrap">
+                                <span class="text-xs font-bold text-gray-200">${s.step}. ${escapeHtml(s.title)}</span>
+                                <span class="text-[9px] font-bold uppercase ${st.text}">${st.label}</span>
+                            </div>
+                            <div class="text-[11px] text-gray-400 mt-0.5">${escapeHtml(s.detail)}</div>
+                            ${s.action ? `<div class="text-[11px] ${st.text} mt-0.5 font-semibold">→ ${escapeHtml(s.action)}</div>` : ''}
+                        </div>
+                    </div>`;
+                }).join('');
+            } catch (e) {
+                document.getElementById('guideSummary').innerText = 'Could not load status.';
             }
         }
 
@@ -1336,8 +1401,9 @@
         async function triggerPipeline() { alert('Super Agent cycle triggered!'); await fetch('/api/trigger', { method: 'POST' }); setTimeout(() => { fetchLogs(); fetchTelemetry(); fetchPosts(); }, 1500); }
         async function savePersona() { alert('Persona saved!'); }
 
-        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); loadMediaMode(); loadProviderConfig(); fetchLogs(); fetchTelemetry(); fetchPosts();
+        loadTopics(); loadSchedule(); loadEqualizer(); loadSampleArticle(); loadImageProvider(); loadMediaMode(); loadProviderConfig(); loadGuide(); fetchLogs(); fetchTelemetry(); fetchPosts();
         setInterval(() => { fetchLogs(); fetchTelemetry(); }, 2000);
+        setInterval(loadGuide, 15000);
     </script>
 </body>
 </html>

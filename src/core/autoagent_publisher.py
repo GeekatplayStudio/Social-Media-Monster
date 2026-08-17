@@ -28,6 +28,71 @@ class AutoAgentPublisher:
         self.publish_url = f"{self.base_url}/publish.php"
         self.timeout = timeout
 
+    # Extensions that must render as a player rather than an image.
+    VIDEO_EXTENSIONS = (".mp4", ".webm", ".mov", ".m4v")
+
+    @classmethod
+    def media_embed(cls, url: str, alt: str = "Agent Media Asset") -> str:
+        """
+        Picks the right tag for the asset.
+
+        Everything used to be emitted as <img>, so a generated .mp4 published as a broken
+        image instead of a playable video.
+        """
+        safe_url = html.escape(url, quote=True)
+        if url.lower().split("?")[0].endswith(cls.VIDEO_EXTENSIONS):
+            return (f'<video src="{safe_url}" controls playsinline preload="metadata" '
+                    f'style="max-width:100%"></video>')
+        return f'<img src="{safe_url}" alt="{html.escape(alt, quote=True)}" />'
+
+    @staticmethod
+    def markdown_to_html(text: str, drop_title: str = "") -> str:
+        """
+        Converts the markdown the writer produces into HTML.
+
+        The body was HTML-escaped wholesale, so "# Heading" and "**bold**" published as
+        literal characters. Everything is still escaped first, then a small, fixed set of
+        inline patterns is promoted to tags - no raw author HTML is ever passed through.
+        """
+        import re as _re
+
+        blocks = []
+        for raw_block in _re.split(r'\n\s*\n', (text or "").strip()):
+            block = raw_block.strip()
+            if not block:
+                continue
+
+            heading = _re.match(r'^(#{1,6})\s+(.*)$', block)
+            if heading:
+                level = min(len(heading.group(1)) + 1, 6)  # the page supplies the h1
+                content = heading.group(2).strip()
+                # The site stores the title separately; repeating it reads as duplication.
+                if drop_title and content.lower().strip('*# ') == drop_title.lower().strip():
+                    continue
+                blocks.append(f"<h{level}>{html.escape(content)}</h{level}>")
+                continue
+
+            lines = [l.strip() for l in block.split("\n") if l.strip()]
+            if lines and all(_re.match(r'^([-*•▪]|\d+[.)])\s+', l) for l in lines):
+                marker = _re.compile(r'^([-*•▪]|\d+[.)])\s+')
+                items = "".join(
+                    f"<li>{html.escape(marker.sub('', l))}</li>" for l in lines
+                )
+                tag = "ol" if _re.match(r'^\d+[.)]', lines[0]) else "ul"
+                blocks.append(f"<{tag}>{items}</{tag}>")
+                continue
+
+            escaped = html.escape(" ".join(lines))
+            if drop_title and escaped.strip('*').lower() == html.escape(drop_title).lower():
+                continue
+            blocks.append(f"<p>{escaped}</p>")
+
+        rendered = "\n".join(blocks)
+        # Inline emphasis, applied after escaping so no author markup can slip through.
+        rendered = _re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', rendered)
+        rendered = _re.sub(r'(?<![\w*])\*(?!\s)([^*\n]+?)(?<!\s)\*(?![\w*])', r'<em>\1</em>', rendered)
+        return rendered
+
     @staticmethod
     def format_code_block(code_text: str, language: str = "python") -> str:
         """Escapes raw code and wraps it in syntax-renderable HTML tags."""
@@ -124,12 +189,12 @@ class AutoAgentPublisher:
         """Formats and publishes an article containing text, uploaded images, and formatted code."""
         content_parts = []
         if summary:
-            content_parts.append(f"<p>{html.escape(summary)}</p>")
+            content_parts.append(self.markdown_to_html(summary, drop_title=title))
 
         # 1. Upload & Embed Image if provided
         if image_path and os.path.exists(image_path):
             img_url = self.upload_media(image_path)
-            content_parts.append(f'<img src="{img_url}" alt="Agent Media Asset" />')
+            content_parts.append(self.media_embed(img_url))
 
         # 2. Format & Escape Code Block if provided
         if code_snippet:

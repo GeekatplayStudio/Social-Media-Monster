@@ -544,6 +544,110 @@ def llm_status():
     }
 
 
+@app.get("/api/readiness")
+def readiness():
+    """
+    Answers "why is nothing being posted?" as an ordered checklist.
+
+    Every precondition the pipeline silently depends on is reported with its state and
+    the single action that clears it, so a blocked run is never a mystery.
+    """
+    from src.core.tavily_client import TavilyClient
+    from src.agents.visual_agent import VisualAgent
+    from collections import Counter
+
+    steps = []
+
+    def step(num, title, state, detail, action=""):
+        steps.append({"step": num, "title": title, "state": state,
+                      "detail": detail, "action": action})
+
+    # 1. Topics
+    with Session(engine) as session:
+        topics_row = session.exec(select(SystemSetting).where(SystemSetting.key_name == "search_topics")).first()
+        topics = (topics_row.value if topics_row else "").strip()
+    step(1, "Choose what to write about",
+         "ok" if topics else "blocked",
+         f"Topics: {topics}" if topics else "No topics set.",
+         "" if topics else "Enter subjects in 'Research Target Subjects'.")
+
+    # 2. Text model
+    llm = llm_status()
+    step(2, "Text model (article quality)",
+         "ok" if llm.get("model_installed") else "warn",
+         llm.get("detail", ""),
+         "" if llm.get("model_installed") else "Set a working model under Provider Config, or run 'ollama serve'.")
+
+    # 3. Research engine
+    tav = TavilyClient().is_configured()
+    step(3, "Research engine", "ok",
+         "Tavily Search (ranked live news)" if tav else "Google News RSS (no Tavily key)",
+         "" if tav else "Optional: add a Tavily key for better sourcing.")
+
+    # 4. Media engine
+    visual = VisualAgent()
+    media_mode = visual.get_active_media_mode()
+    bulk_on = visual.is_enabled()
+    if media_mode == "video":
+        models = visual._resolve_video_models()
+        media_ok, media_detail = bool(models), (models.get("unet", "") if models else "No LTX video model found.")
+    else:
+        trio = visual._resolve_model_files()
+        media_ok = bool(trio) or bool(visual.active_checkpoint)
+        media_detail = trio.get("unet") if trio else (visual.active_checkpoint or "No image model found.")
+    step(4, f"Create one {media_mode} per story",
+         "ok" if (bulk_on and media_ok) else "warn",
+         f"Mode: {media_mode.upper()} | Auto-render: {'ON' if bulk_on else 'OFF'} | Model: {media_detail}",
+         "" if bulk_on else "Turn on Bulk Images/Video in Anti-Spam & Image Settings, or posts will wait for artwork.")
+
+    # 5. Channels
+    channels = platform_store.describe_all()
+    ready = [c for c in channels if c["configured"] and c["enabled"] and c["can_post"]]
+    connected = [c for c in ready if c["status"] == "connected"]
+    step(5, "Connect where to post",
+         "ok" if ready else "blocked",
+         f"{len(ready)} channel(s) ready" + (f", {len(connected)} verified: " + ", ".join(c['label'] for c in connected) if connected else ""),
+         "" if ready else "Open Channel Connections and connect at least one channel.")
+
+    # 6. Content waiting
+    with Session(engine) as session:
+        drafts = session.exec(select(PostDraft)).all()
+    counts = Counter(d.status for d in drafts)
+    approved = [d for d in drafts if d.status == "approved"]
+    missing_media = [d for d in approved if not (d.image_path or getattr(d, "media_path", None))]
+    step(6, "Posts approved and ready to send",
+         "ok" if approved and not missing_media else ("warn" if approved else "warn"),
+         f"{len(approved)} approved" + (f" ({len(missing_media)} still waiting for artwork)" if missing_media else "")
+         + f" | drafts: {counts.get('draft', 0)}, humanized: {counts.get('humanized', 0)}, published: {counts.get('published', 0)}",
+         "Run a cycle to create posts." if not approved else
+         ("Generate artwork - posts are held until they have an image or video." if missing_media else ""))
+
+    # 7. Mode - the gate people miss
+    is_prod = super_agent.mode == "production"
+    step(7, "Switch to PRODUCTION to actually post",
+         "ok" if is_prod else "blocked",
+         f"Mode is {super_agent.mode.upper()}." + ("" if is_prod else " DEMO generates everything but never sends."),
+         "" if is_prod else "Click PROD in the header. Nothing is dispatched while in DEMO.")
+
+    # 8. Automation
+    sched = scheduler_service.get_status()
+    step(8, "Run automatically on a schedule",
+         "ok" if sched.get("enabled") else "warn",
+         f"Scheduler {'ON' if sched.get('enabled') else 'OFF'} | every {sched.get('interval_minutes')} min"
+         + (f" | next {sched.get('next_run', '')[:16].replace('T', ' ')}" if sched.get("enabled") else ""),
+         "" if sched.get("enabled") else "Optional: enable the scheduler once a manual run looks right.")
+
+    blockers = [s for s in steps if s["state"] == "blocked"]
+    if blockers:
+        summary = f"NOT POSTING - {blockers[0]['action']}"
+    elif not approved:
+        summary = "Ready. No approved posts yet - run a cycle."
+    else:
+        summary = f"Ready to post {len(approved)} approved post(s) to {len(ready)} channel(s)."
+
+    return {"summary": summary, "blocked": bool(blockers), "mode": super_agent.mode, "steps": steps}
+
+
 @app.get("/api/health")
 def health_check():
     """Lightweight readiness probe used by the start script and by uptime checks."""
