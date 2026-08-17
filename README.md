@@ -49,7 +49,13 @@ It features a high-contrast corporate control dashboard equipped with a **15-Ban
 * **Master Key Handling**: The key lives in `.env.secret` (git-ignored) or the `SMM_MASTER_KEY` environment variable. It is never committed.
 * **Key Rotation**: `python scripts/rotate_key.py` replaces the master key and re-encrypts every stored credential under the new one in a single transaction, so a previously exposed key stops decrypting current data.
 * **Payload Sanitization Gate**: Input script/injection stripping and output redaction of OpenAI, Anthropic, Gemini, Tavily and Slack-style tokens.
+* **Secrets never leave the server**: no API returns a decrypted credential. `GET /api/platforms` and `GET /api/provider-config` report only an `is_set` flag per field, and submitting a blank secret preserves the stored one rather than wiping it.
+* **Nothing sensitive is committed**: `.env.secret`, `*.db`, `.run/` and generated media are git-ignored. The repository contains no live key, and no credential is ever written to the event log.
 * **Google OAuth 2.0 Auth**: Conditional remote protection (bypassed on local desktop, enforced on remote deployment).
+
+> **Historical note:** `.env.secret` was tracked before `v1.1`. That key has been rotated
+> with `scripts/rotate_key.py`, so the copy still present in git history no longer
+> decrypts anything. Rotate again if you ever suspect exposure.
 
 ### 🔌 5. Abstract Provider API Layer & Image Engine Selector
 * Abstracted routing across Local Ollama, OpenAI, Google Gemini, Anthropic Claude, Stability AI, ComfyUI Org, and the Editorial Card renderer.
@@ -70,6 +76,52 @@ Posts move through explicit states, and each agent only picks up its own stage:
 `draft` → `humanized` → `approved` \| `needs_review` → `published` \| `rejected`
 
 Approve or reject any post from the dashboard, from `POST /api/posts/{id}/approve`, or via the MCP `approve_post` tool. Publishing only dispatches in **PRODUCTION** mode.
+
+---
+
+## 🧭 How It Works (the whole flow)
+
+```
+  Topics you type
+        ↓
+  1. RESEARCH    Tavily Search (or Google News RSS) finds fresh stories, de-duped by URL
+        ↓
+  2. VERIFY      Full article text pulled, page chrome stripped, core facts extracted
+        ↓
+  3. WRITE       One post per channel, in your equalizer voice and each channel's format
+        ↓
+  4. HUMANIZE    AI tropes removed, CTR and AI-detection scored
+        ↓
+  5. QA GATE     Approved, or held for review
+        ↓
+  6. ARTWORK     ONE image or video per STORY, reused by every channel's post
+        ↓
+  7. PUBLISH     Sent only in PRODUCTION mode, only to connected channels,
+                 only once the artwork exists — then marked published so it never repeats
+```
+
+**The dashboard shows this as a live checklist.** The **Setup & Status** panel at the top
+lists all eight steps with their state and, when something is blocking, the exact action
+that clears it:
+
+```
+NOT POSTING - Click PROD in the header. Nothing is dispatched while in DEMO.
+```
+
+That panel is the first place to look whenever the engine seems idle. It is also
+available as `GET /api/readiness`.
+
+> **The most common surprise:** the engine starts in **DEMO** mode, which generates
+> everything but never sends. Click **PROD** in the header to actually publish.
+
+### One asset per story, never per post
+
+A story published to 10 channels used to render 10 separate images. It now renders **one
+master asset per story** and attaches it to every post of that story:
+
+* 3 stories × 10 channels = **3 renders**, not 30
+* re-running a cycle re-renders **nothing**
+* related stories on the same subject get different staging, so artwork never repeats
 
 ---
 
@@ -122,7 +174,33 @@ to list what the endpoint actually has. The badge reads `ready`, `model not inst
 **Cloud** — paste an OpenAI, Gemini, or Anthropic key in the same panel and switch the
 provider dropdown. Cloud models are faster and need no local resources.
 
-### 3b. Image Rendering (ComfyUI)
+### 3b. Image & Video Rendering (ComfyUI)
+
+Choose **Image** or **Video** mode in *Anti-Spam & Image Settings*. Either way the engine
+produces **one master asset per story** and reuses it across every channel.
+
+Modern models ship as a bare transformer, so they are loaded as **UNET + text encoder +
+VAE** rather than a single checkpoint file. Auto-detection prefers them and falls back to
+a self-contained checkpoint. Verified working locally:
+
+| Purpose | Model | Text encoder | VAE | Steps |
+|---|---|---|---|---|
+| **Image** | `z_image_turbo_bf16` | `qwen_3_4b` (type `lumina2`) | `ae.safetensors` | 8 @ CFG 1.5 |
+| **Video** | `ltx-2.5-22b-distilled-transformer` | `gemma4-12b-with-proj-ltx-2.5` | `ltx-2.5-video-vae-bf16` | 8 @ CFG 1.0 |
+
+Pin any of them in `config/config.yaml` under `comfyui:` (`image_unet`, `image_clip`,
+`image_clip_type`, `image_vae`, `video_unet`, `video_clip`, `video_vae`) if auto-detection
+picks the wrong one.
+
+> Turbo and distilled models are trained for very few steps at low CFG. Running them at
+> SDXL's defaults (25 steps / CFG 7) wastes time and over-cooks the output, so step and
+> CFG are matched to the checkpoint family automatically.
+
+If a render fails, ComfyUI's own error is reported immediately — the failing node and its
+message — rather than waiting out the poll budget. When the server is busy with other
+work, the log reports the queue position.
+
+### 3c. Checkpoint Notes (SD 1.5 / SDXL)
 
 Set the engine under **⚙ → Image Engine**. For local ComfyUI, start it first; the agent
 auto-detects a checkpoint and **prefers SDXL or Flux over SD 1.5**.
@@ -193,7 +271,47 @@ The tool decrypts every stored credential with the current key, generates a new 
 
 > Rotation does **not** rewrite git history — the old key remains in past commits. Rotation is what makes it worthless against your current data. Credentials that also exist at the provider (OpenAI, Tavily, platform tokens) should additionally be regenerated in those dashboards.
 
-### 6. Connecting Your Social Accounts
+### 6. Publishing to Your Own Website (The Output Node)
+
+Besides the social channels, posts can be published to your own site through a signed
+REST API. The channel appears in **Channel Connections** as **The Output Node
+(AutoAgent)**, and each row shows its target host so it is identifiable at a glance.
+
+**Authentication — HMAC-SHA256, shared secret, identical on both ends:**
+
+| Operation | Signed message | Sent as |
+|---|---|---|
+| Publish | the raw JSON request body | `X-Signature`; `timestamp` **inside the body** |
+| Upload | `"<timestamp>:<filename>"` | `X-Signature` + `X-Timestamp` + `X-File-Name` |
+
+**Setup:**
+
+1. On the site, copy `api/config.local.php.example` → `api/config.local.php` and set
+   `API_SECRET_KEY` (generate one with `php -r "echo bin2hex(random_bytes(32));"`).
+   That file is git-ignored and denied over HTTP by `api/.htaccess`.
+   An environment variable of the same name takes precedence.
+2. In the dashboard, paste **the same key** into the channel's *Secret Key* field and set
+   the *Base API URL* to the folder containing `publish.php`.
+3. Press **Test Connection**.
+
+The test performs a real signed request against `api/status.php` and reports storage
+driver, writability and post count:
+
+```
+Connected to https://example.com/ai-news/api | storage sqlite OK (12 posts) | uploads writable
+```
+
+Failures are specific rather than generic: `401` names a key mismatch, `404` names a wrong
+base URL, `5xx` quotes the server's own error, and an unreachable host says so.
+
+> A `500 Server misconfigured: signing key unavailable` means `config.local.php` is
+> missing or `API_SECRET_KEY` is unset **on the server** — the client is fine.
+
+Markdown in the post body is converted to real HTML after escaping (so no markup can be
+injected), a leading heading that merely repeats the stored title is dropped, and videos
+are embedded with `<video controls>` rather than `<img>`.
+
+### 7. Connecting Your Social Accounts
 
 Open the dashboard, click the **⚙ gear** icon, then the **Channel Connections** tab. Each of the 9 channels has its own panel with the exact fields it needs, a link to its developer portal, and setup notes.
 
@@ -225,7 +343,7 @@ Publishing runs only in **PROD** mode, only for approved drafts, and only to cha
 >
 > **Instagram** requires the image to be fetchable at a public URL; it cannot read a file from your machine. Set *Public Image Base URL* to somewhere your generated images are actually served.
 
-### 7. Tavily is Optional
+### 8. Tavily is Optional
 
 The engine runs fully without a Tavily key — `ResearchAgent` falls back to Google News RSS and the tech feeds, and `VerifierAgent` works from feed summaries. Adding a key improves discovery relevance and gives the verifier full article bodies to extract facts from.
 
@@ -246,12 +364,28 @@ A missing, blank, placeholder, rate-limited or rejected key all degrade to the R
 * **Security**: Cryptography (Fernet symmetric key encryption)
 * **Frontend**: HTML5, Vanilla JavaScript, TailwindCSS, JetBrains Mono
 * **Research**: Tavily Search & Extract API (optional, with RSS fallback)
-* **Image Processing**: Pillow (PIL), ComfyUI API, Stability AI REST API
-* **Testing**: PyTest — 45 tests, including a regression suite pinning the content-quality fixes
+* **Image / Video**: Pillow (PIL), local ComfyUI (Z-Image, SDXL, Flux, LTX 2.5), Stability AI REST API
+* **Testing**: PyTest — **147 tests**
 
 ```bash
 python -m pytest tests/ -q
 ```
+
+The suite is hermetic: it runs against a throwaway database and never calls a live model
+or spends Tavily credits, so it cannot disturb your saved credentials or post history.
+
+| Variable | Effect |
+|---|---|
+| `SMM_TEST_LIVE=1` | Use the real providers instead of the offline path |
+| `SMM_TEST_USE_REAL_DB=1` | Run against the real database (destructive — fixtures delete rows) |
+| `SMM_DB_PATH` | Point any run at a specific database file |
+| `SMM_DISABLE_LLM` / `SMM_DISABLE_TAVILY` | Force the offline/RSS paths |
+
+Coverage includes regression tests that pin the behaviour most likely to silently
+regress: one render per story (never per post), posts held until their artwork exists,
+published posts never re-sent, image prompts grounded in their own article, credentials
+encrypted at rest and never returned over HTTP, and connection tests that fail on a bad
+key rather than reporting a false green.
 
 ---
 
