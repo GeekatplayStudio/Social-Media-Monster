@@ -1169,7 +1169,9 @@
                             <span class="w-7 h-7 shrink-0 rounded-lg bg-dark-1 border border-gray-700 flex items-center justify-center text-gray-300 font-bold">${c.icon}</span>
                             <div class="min-w-0">
                                 <div class="font-bold text-gray-200 truncate">${escapeHtml(c.label)}</div>
-                                <div class="text-[10px] text-gray-500 truncate">${c.account ? escapeHtml(c.account) + ' · ' : ''}${escapeHtml(c.auth)}</div>
+                                <div class="text-[10px] text-gray-500 truncate">
+                                    ${c.target ? `<span class="text-sky-400">${escapeHtml(c.target)}</span> · ` : ''}${c.account ? escapeHtml(c.account) + ' · ' : ''}${escapeHtml(c.auth)}
+                                </div>
                             </div>
                         </div>
                         <div class="flex items-center gap-2 shrink-0">

@@ -168,11 +168,23 @@ PLATFORM_SPECS = {
             field("channel_id", "Channel ID", "text", required=False, placeholder="UCxxxxxxxx"),
         ],
     },
+    "autoagent": {
+        "label": "The Output Node (AutoAgent)",
+        "icon": "🤖",
+        "can_post": True,
+        "auth": "HMAC-SHA256 REST API",
+        "portal": "https://www.vladimirchopine.com/ai-news/api",
+        "setup": "Configure the base API URL and shared secret key matching your server's api/config.php.",
+        "fields": [
+            field("base_url", "Base API URL", "url", placeholder="https://www.vladimirchopine.com/ai-news/api"),
+            field("secret_key", "Secret Key", "password", secret=True, placeholder="shared_hmac_secret_key"),
+        ],
+    },
 }
 
 PLATFORM_ORDER = [
     "twitter", "linkedin", "reddit", "telegram", "discord",
-    "wordpress", "facebook", "instagram", "youtube",
+    "wordpress", "facebook", "instagram", "youtube", "autoagent",
 ]
 
 
@@ -328,10 +340,27 @@ class PlatformCredentialStore:
                 "is_set": bool(value),
             })
 
+        # Surface where this channel actually posts. A generic label like
+        # "The Output Node (AutoAgent)" is impossible to match to your own site by eye.
+        target = ""
+        for f in spec["fields"]:
+            if f["secret"]:
+                continue
+            value = str(stored.get(f["name"], "")).strip()
+            if not value:
+                continue
+            if f["kind"] == "url" or value.startswith("http"):
+                target = value.split("//")[-1].rstrip("/")
+                break
+            if f["name"] in ("chat_id", "subreddit", "page_id", "account_id", "author_urn", "channel_id"):
+                target = value
+                break
+
         return {
             "platform": platform,
             "label": spec["label"],
             "icon": spec["icon"],
+            "target": target,
             "can_post": spec["can_post"],
             "auth": spec["auth"],
             "portal": spec["portal"],

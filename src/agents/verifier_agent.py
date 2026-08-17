@@ -63,6 +63,20 @@ class VerifierAgent:
             ).all()
 
             for item in unprocessed_items:
+                clean_title = self._clean(item.title)
+
+                # Skip if story already verified or duplicate headline exists
+                existing = session.exec(
+                    select(VerifiedNews).where(
+                        (VerifiedNews.trend_id == item.id) | (VerifiedNews.headline == clean_title)
+                    )
+                ).first()
+                if existing:
+                    item.processed = True
+                    session.add(item)
+                    session.commit()
+                    continue
+
                 source_text = self._resolve_source_text(item)
 
                 if len(source_text) < self.MIN_FACT_CHARS:
@@ -80,7 +94,7 @@ class VerifierAgent:
 
                 verified = VerifiedNews(
                     trend_id=item.id,
-                    headline=self._clean(item.title),
+                    headline=clean_title,
                     verified_facts=verified_facts,
                     source_reliability_score=self._score_source(item),
                     key_takeaways=key_takeaways,

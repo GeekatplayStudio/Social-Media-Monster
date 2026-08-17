@@ -170,15 +170,51 @@ class ResearchAgent:
         text_lower = text.lower()
         return any(t.lower() in text_lower for t in topics) or "ai" in text_lower or "model" in text_lower
 
+    @staticmethod
+    def _canonical_url(url: str) -> str:
+        """Strips tracking query parameters and trailing slashes for canonical deduplication."""
+        parsed = urllib.parse.urlparse(url or "")
+        clean_query = urllib.parse.parse_qs(parsed.query)
+        # Strip common tracking query params
+        tracking_keys = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid"}
+        filtered_query = {k: v for k, v in clean_query.items() if k.lower() not in tracking_keys}
+        new_query = urllib.parse.urlencode(filtered_query, doseq=True)
+        canonical = urllib.parse.urlunparse((
+            parsed.scheme,
+            parsed.netloc.lower(),
+            parsed.path.rstrip("/"),
+            parsed.params,
+            new_query,
+            ""
+        ))
+        return canonical or url
+
     def _save_trend_item(self, title: str, url: str, source: str, summary: str,
                          viral_score: float = 1.0, raw_content: str = None) -> tuple:
+        canonical_url = self._canonical_url(url)
+        norm_title = (title or "").strip().lower()
+
         with Session(engine) as session:
-            existing = session.exec(select(TrendItem).where(TrendItem.url == url)).first()
+            # Check by exact URL or canonical URL
+            existing = session.exec(
+                select(TrendItem).where(
+                    (TrendItem.url == url) | (TrendItem.url == canonical_url)
+                )
+            ).first()
+
+            # Also check by normalized title match if title is substantial (> 10 chars)
+            if not existing and len(norm_title) > 10:
+                all_items = session.exec(select(TrendItem)).all()
+                for item in all_items:
+                    if (item.title or "").strip().lower() == norm_title:
+                        existing = item
+                        break
+
             if not existing:
                 clean_summary = re.sub(r'<[^>]+>', '', summary or "")[:800]
                 item = TrendItem(
                     title=title,
-                    url=url,
+                    url=canonical_url,
                     source=source,
                     summary=clean_summary,
                     raw_content=(raw_content or "")[:8000] or None,

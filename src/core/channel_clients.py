@@ -515,6 +515,123 @@ def youtube_publish(creds, post):
     )
 
 
+# ============================================================================ AutoAgent (The Output Node)
+def autoagent_test(creds):
+    """
+    Verifies the endpoint is actually reachable and the shared secret is accepted.
+
+    This previously constructed the publisher and returned success without contacting
+    the server at all, so a wrong URL or a mismatched secret still reported "valid".
+    """
+    err = _missing(creds, "base_url", "secret_key")
+    if err:
+        return ChannelResult(False, err)
+
+    from src.core.autoagent_publisher import AutoAgentPublisher
+    base_url = creds["base_url"].rstrip('/')
+    publisher = AutoAgentPublisher(base_url, creds["secret_key"])
+
+    def signed_post(url):
+        # Same scheme as publishing: HMAC-SHA256 over the raw body, timestamp inside the
+        # payload (publish.php reads it from the body, not from a header).
+        body_bytes = json.dumps({"timestamp": int(time.time()), "probe": "connection-test"},
+                                separators=(',', ':'), ensure_ascii=False).encode("utf-8")
+        return _request(
+            url,
+            method="POST",
+            headers={"X-Signature": publisher.compute_payload_signature(body_bytes),
+                     "Content-Type": "application/json"},
+            data=body_bytes,
+        )
+
+    # Prefer the dedicated status endpoint: it reports storage and upload health, and is
+    # idempotent. Probing publish.php consumes a replay nonce every time.
+    status_url = f"{base_url}/status.php"
+    status, body, error = signed_post(status_url)
+
+    if status == 200 and isinstance(body, dict):
+        storage = body.get("storage", {}) or {}
+        uploads = body.get("uploads", {}) or {}
+        parts = [f"Connected to {base_url}"]
+        if storage.get("writable"):
+            count = storage.get("posts")
+            parts.append(f"storage {storage.get('driver', '?')} OK"
+                         + (f" ({count} posts)" if count is not None else ""))
+        else:
+            parts.append(f"STORAGE UNAVAILABLE ({storage.get('error') or 'cannot open database'})")
+        parts.append("uploads writable" if uploads.get("writable") else "UPLOADS NOT WRITABLE")
+
+        ok = bool(storage.get("writable")) and bool(uploads.get("writable"))
+        return ChannelResult(ok, " | ".join(parts), account=base_url)
+
+    # Older deployments have no status.php. Fall back to a signed publish probe that
+    # omits title/content: the endpoint checks signature and freshness before fields,
+    # so a validation complaint still proves the key and clock are right.
+    if status == 404:
+        status, body, error = signed_post(publisher.publish_url)
+
+    if status == 0:
+        return ChannelResult(False, f"Cannot reach {publisher.publish_url}. {error or ''}".strip())
+    if status in (401, 403):
+        return ChannelResult(
+            False,
+            f"{base_url} rejected the shared secret (HTTP {status}). Check that the key here "
+            f"matches api/config.php on the server.",
+        )
+    if status == 404:
+        return ChannelResult(
+            False,
+            f"{publisher.publish_url} was not found (HTTP 404). Check the Base API URL - "
+            f"it should point at the folder containing publish.php.",
+        )
+
+    detail = ""
+    if isinstance(body, dict):
+        detail = str(body.get("error") or body.get("message") or "")[:200]
+    elif isinstance(body, str):
+        detail = body.strip()[:200]
+
+    if status >= 500:
+        # Reached the server, but it failed. Not proof of a working integration.
+        return ChannelResult(
+            False,
+            f"{base_url} is reachable but returned HTTP {status}. "
+            f"{detail or 'The endpoint raised a server error.'} "
+            f"Check the server log for publish.php.",
+        )
+
+    # A 4xx that is not an auth failure means the request was authenticated and only the
+    # ping payload was rejected - which is exactly what a connectivity probe should see.
+    return ChannelResult(True, f"Reachable and authenticated at {base_url} (HTTP {status})",
+                         account=base_url)
+
+
+def autoagent_publish(creds, post):
+    err = _missing(creds, "base_url", "secret_key")
+    if err:
+        return ChannelResult(False, err)
+
+    from src.core.autoagent_publisher import AutoAgentPublisher
+    base_url = creds["base_url"].rstrip('/')
+    publisher = AutoAgentPublisher(base_url, creds["secret_key"])
+
+    headline = post.get("headline", "AutoAgent Article")
+    content = post.get("content", "")
+    image_path = post.get("image_path")
+
+    try:
+        res = publisher.publish_code_article(
+            title=headline,
+            summary=content,
+            image_path=image_path if (image_path and os.path.exists(image_path)) else None
+        )
+        post_id = str(res.get("post_id", "")) if isinstance(res, dict) else ""
+        msg = res.get("message", "Published successfully!") if isinstance(res, dict) else "Published"
+        return ChannelResult(True, f"Posted to Output Node: {msg}", external_id=post_id, url=f"{base_url}")
+    except Exception as e:
+        return ChannelResult(False, f"Output Node publish failed: {e}")
+
+
 # ---------------------------------------------------------------------------- registry
 CHANNELS = {
     "twitter":   {"test": twitter_test,   "publish": twitter_publish},
@@ -526,6 +643,7 @@ CHANNELS = {
     "facebook":  {"test": facebook_test,  "publish": facebook_publish},
     "instagram": {"test": instagram_test, "publish": instagram_publish},
     "youtube":   {"test": youtube_test,   "publish": youtube_publish},
+    "autoagent": {"test": autoagent_test, "publish": autoagent_publish},
 }
 
 

@@ -17,7 +17,10 @@ def load_config():
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 config = load_config()
-db_path = config.get("database", {}).get("sqlite_path", "data/social_monster.db")
+# SMM_DB_PATH lets a test run (or a second instance) point at its own database. Without
+# it the suite operated on the live database and wiped saved channel credentials.
+db_path = os.environ.get("SMM_DB_PATH", "").strip() or \
+    config.get("database", {}).get("sqlite_path", "data/social_monster.db")
 # Anchor a relative path to the project, not to the shell's current directory. Otherwise
 # launching from scripts\ (or anywhere else) silently creates a second, empty database.
 if not os.path.isabs(db_path):
@@ -157,17 +160,33 @@ def seed_defaults():
 
         session.commit()
 
-    # Seed autoagent website platform credentials by default if not set
+    # Pre-fill the Output Node endpoint so the channel is easy to find in the dashboard.
+    #
+    # The signing key is seeded ONLY from the environment. A hardcoded fallback would ship
+    # a known shared secret in the repository and auto-enable a live publishing channel
+    # with it - anyone reading the source could then sign requests to the site. With no
+    # API_SECRET_KEY present the channel stays unconfigured and disabled until a real key
+    # is entered under Channel Connections.
     try:
         from src.core.platforms import PlatformCredentialStore
         store = PlatformCredentialStore()
         if not store.is_configured("autoagent"):
-            default_key = os.environ.get("API_SECRET_KEY", "autoagent_secret_key_123")
+            env_key = os.environ.get("API_SECRET_KEY", "").strip()
             store.save_credentials("autoagent", {
-                "base_url": "https://www.vladimirchopine.com/ai-news/api",
-                "secret_key": default_key
+                "base_url": os.environ.get(
+                    "AUTOAGENT_BASE_URL", "https://www.vladimirchopine.com/ai-news/api"),
+                "secret_key": env_key,
             })
-            store.set_enabled("autoagent", True)
+            # Only arm the channel once it can actually authenticate.
+            store.set_enabled("autoagent", bool(env_key))
+            if not env_key:
+                log_event(
+                    "DBInit",
+                    "Output Node endpoint pre-filled but left DISABLED: no signing key yet. "
+                    "Add it under Channel Connections (it must match API_SECRET_KEY in the "
+                    "site's api/config.local.php).",
+                    level="INFO",
+                )
     except Exception as e:
         log_event("DBInit", f"Notice initializing autoagent platform defaults: {e}", level="WARNING")
 

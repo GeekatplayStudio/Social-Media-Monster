@@ -10,7 +10,27 @@ Run against the live providers deliberately with:
     SMM_TEST_LIVE=1 python -m pytest tests/ -q
 """
 import os
+import tempfile
 import pytest
+
+# Set BEFORE src.core.db is imported: the engine is built at import time.
+#
+# The suite deletes rows wholesale in its fixtures. Pointed at the real database that
+# destroyed saved channel credentials and the post history, so tests now get a throwaway
+# file. Set SMM_TEST_USE_REAL_DB=1 to opt out.
+if not os.environ.get("SMM_TEST_USE_REAL_DB"):
+    _test_db = os.path.join(tempfile.gettempdir(), "smm_test_suite.db")
+    os.environ["SMM_DB_PATH"] = _test_db
+    for _suffix in ("", "-wal", "-shm"):
+        try:
+            os.remove(_test_db + _suffix)
+        except OSError:
+            pass
+
+    # Create the schema now: modules that build singletons at import time query the
+    # database before any test fixture gets a chance to run init_db().
+    from src.core.db import init_db as _init_db
+    _init_db()
 
 
 @pytest.fixture(autouse=True, scope="session")
